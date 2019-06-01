@@ -333,7 +333,7 @@ context = 5
 
 Dynamic inventory будет основан на gcp_compute (он как раз и был активирован выше в секции inventory).
 inventory.gcp
-```
+```yaml
 ---
 #http://docs.testing.ansible.com/ansible/latest/plugins/inventory/gcp_compute.html
 #Uses a YAML configuration file that ends with gcp_compute.(yml|yaml) or gcp.(yml|yaml).
@@ -364,14 +364,14 @@ compose:
 
 Плейбуки для удобства разбиты на роли docker_host и otus_reddit.
 ansible/roles/docker_host/tasks/main.yml
-```
+```yaml
 ---
 - include: install_docker.yml
 
 ```
 
 ansible/roles/docker_host/tasks/install_docker.yml
-```
+```yaml
 ---
 - name: Install packages to allow apt to use a repository over HTTPS
   apt:
@@ -409,13 +409,13 @@ ansible/roles/docker_host/tasks/install_docker.yml
 - поскольку далее мы планируем использовать Ansible, нам необходимо установить python-docker. Все остальные шаги - "перевод" официальной документации Docker (список shell-команд) в yaml.
 
 ansible/roles/otus_reddit/tasks/main.yml
-```
+```yaml
 ---
 - include: deploy_container.yml
 ```
 
 ansible/roles/otus_reddit/tasks/deploy_container.yml
-```
+```yaml
 ---
 - name: Create a container with the otus-reddit app
   docker_container:
@@ -427,7 +427,7 @@ ansible/roles/otus_reddit/tasks/deploy_container.yml
 
 Плейбуки, в которых используются описанные выше роли:
 site.yml
-```
+```yaml
 ---
 - import_playbook: base.yml
 - import_playbook: docker_host.yml
@@ -435,7 +435,7 @@ site.yml
 ```
 
 base.yml
-```
+```yaml
 ---
 - name: Check && install python
   hosts: all
@@ -449,7 +449,7 @@ base.yml
 ```
 
 docker_host.yml
-```
+```yaml
 ---
 - name: Install docker
   hosts: docker_host
@@ -460,7 +460,7 @@ docker_host.yml
 ```
 
 otus_reddit.yml
-```
+```yaml
 ---
 - name: Deploy app
   hosts: docker_host
@@ -471,7 +471,7 @@ otus_reddit.yml
 ```
 
 Плейбук для Packer:
-```
+```yaml
 ---
 - import_playbook: base.yml
 
