@@ -1,0 +1,32 @@
+# Terraform
+*.tfstate
+*.tfstate.*.backup
+*.tfstate.backup
+*.tfvars
+.terraform/
+*.terraform.tfstate.lock.info
+
+# Packer
+/docker-monolith/infra/packer/variables.json
+
+# My scripts
+*.cache
+
+# Ansible
+*.retry
+service_account.json
+vault.key
+
+# Ansible Galaxy
+jdauphant.nginx
+
+# Inspec
+inspec.lock
+
+# Vagrant & molecule
+.vagrant/
+*.log
+*.pyc
+.molecule
+.cache
+.pytest_cache

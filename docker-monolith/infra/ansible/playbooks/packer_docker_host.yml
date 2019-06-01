@@ -1,0 +1,8 @@
+---
+- import_playbook: base.yml
+
+- name: Install Docker CE
+  hosts: all
+  become: true
+  roles:
+    - docker_host

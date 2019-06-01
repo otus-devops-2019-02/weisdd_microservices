@@ -1,0 +1,4 @@
+---
+- import_playbook: base.yml
+- import_playbook: docker_host.yml
+- import_playbook: otus_reddit.yml

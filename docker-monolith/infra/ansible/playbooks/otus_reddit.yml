@@ -1,0 +1,7 @@
+---
+- name: Deploy app
+  hosts: docker_host
+  become: true
+
+  roles:
+    - otus_reddit

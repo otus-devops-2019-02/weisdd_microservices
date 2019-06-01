@@ -1,0 +1,7 @@
+---
+- name: Create a container with the otus-reddit app
+  docker_container:
+    name: reddit
+    image: "weisdd/otus-reddit:1.0"
+    ports:
+      - "9292:9292"
