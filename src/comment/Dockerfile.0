@@ -5,7 +5,7 @@ RUN mkdir $APP_HOME
 WORKDIR $APP_HOME
 COPY . $APP_HOME
 
-RUN apk update && apk add --no-cache build-base ruby ruby-json ruby-bigdecimal ruby-dev ruby-bundler \
+RUN apk update && apk add --no-cache build-base ruby-full ruby-dev ruby-bundler \
 	&& gem install bundler --no-ri --no-rdoc \
 	&& bundle install \
 	&& apk del build-base ruby-dev
