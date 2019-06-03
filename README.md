@@ -574,3 +574,268 @@ docker-host-0              : ok=2    changed=1    unreachable=0    failed=0
 
 Теперь приложение доступно по адресу:
 35.240.8.240:9292
+
+
+## HW#16 (docker-3)
+В данной работе мы:
+* научились описывать и собирать Docker-образы для сервисного приложения;
+* научились оптимизировать работу с Docker-образами;
+* опробовали запуск и работу приложения на основе Docker-образов;
+* оценили удобство запуска контейнеров при помощи docker run;
+* переопределили ENV через docker run;
+* оптимизировали размер контейнера (образ на базе Alpine).
+
+Работа велась в каталоге src, где под каждый сервис существует отдельная директория (comment, post-py, ui). Для MongoDB использовался образ из Docker Hub.
+
+В соответствии с рекомендациями hadolint было внесены изменения:
+### ui/Dockerfile
+RUN apt-get update -qq && apt-get install -y build-essential
+=>
+RUN apt-get update -qq && apt-get install -y build-essential --no-install-recommends \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ADD Gemfile* $APP_HOME/
+=>
+COPY Gemfile* $APP_HOME/
+
+ADD . $APP_HOME
+=>
+COPY . $APP_HOME
+
+### comment/Dockerfile
+RUN apt-get update -qq && apt-get install -y build-essential
+=>
+RUN apt-get update -qq && apt-get install -y build-essential --no-install-recommends \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+	
+ADD Gemfile* $APP_HOME/
+=>
+COPY Gemfile* $APP_HOME/
+
+ADD . $APP_HOME
+=>
+COPY . $APP_HOME
+
+### post-py/Dockerfile
+ADD . /app
+=>
+COPY . /app
+
+В Dockerfile со слайдов было обнаружено ряд проблем:
+1. image для post-py не собирался, т.к. отсутствовал build-base. Обновлённый dockerfile выглядит следующим образом:
+```dockerfile
+FROM python:3.6.0-alpine
+
+WORKDIR /app
+COPY . /app
+
+RUN apk update && apk add --no-cache build-base \
+    && pip install -r /app/requirements.txt \
+    && apk del build-base
+
+ENV POST_DATABASE_HOST post_db
+ENV POST_DATABASE posts
+
+ENTRYPOINT ["python3", "post_app.py"]
+```
+
+2. образы для comment и ui не собирались из-за отсутствия одной записи в apt list:
+```
+W: Failed to fetch http://deb.debian.org/debian/dists/jessie-updates/InRelease  Unable to find expected entry 'main/binary-amd64/Packages' in Release file (Wrong sources.list entry or malformed file)
+E: Some index files failed to download. They have been ignored, or old ones used instead.
+```
+Поэтому пришлось использовать другую версию контейнера:
+FROM ruby:2.2
+=>
+FROM ruby:2.3
+
+После этого все образы успешно собрались:
+```bash
+$ docker build -t weisdd/post:1.0 post-py/
+$ docker build -t weisdd/comment:1.0 ./comment
+$ docker build -t weisdd/ui:1.0 ./ui
+```
+
+Также мы скачали image для mongo:
+```bash
+$ docker pull mongo:latest
+```
+
+Для удобства, в наших контейнерах использовались сетевые алиасы (отсылка к ним есть в ENV). Поскольку в сети по умолчанию алиасы недоступны, потребовалось создать отдельную bridge-сеть.
+```bash
+$ docker network create reddit
+$ docker run -d --network=reddit --network-alias=post_db --network-alias=comment_db mongo:latest
+$ docker run -d --network=reddit --network-alias=post weisdd/post:1.0
+$ docker run -d --network=reddit --network-alias=comment weisdd/comment:1.0
+$ docker run -d --network=reddit -p 9292:9292 weisdd/ui:1.0
+```
+
+### Задание со * (стр. 15)
+Задание:
+Остановите контейнеры:
+docker kill $(docker ps -q)
+Запустите контейнеры с другими сетевыми алиасами.
+Адреса для взаимодействия контейнеров задаются через ENV-переменные внутри Dockerfile'ов.
+При запуске контейнеров (docker run) задайте им переменные окружения соответствующие новым сетевым алиасам, не пересоздавая образ.
+Проверьте работоспособность сервиса
+
+Решение:
+Переопределить ENV мы можем при помощи флага -e:
+
+```bash
+$ docker run -d --network=reddit --network-alias=post_db2 --network-alias=comment_db2 mongo:latest
+
+$ docker run -d --network=reddit --network-alias=post2 -e POST_DATABASE_HOST=post_db2 weisdd/post:1.0
+
+$ docker run -d --network=reddit --network-alias=comment2 -e COMMENT_DATABASE_HOST=comment_db2 weisdd/comment:1.0
+
+$ docker run -d --network=reddit -p 9292:9292 -e POST_SERVICE_HOST=post2 -e COMMENT_SERVICE_HOST=comment2 weisdd/ui:1.0
+```
+
+### Работа с образами
+После внесения изменений в Dockerfile и пересборки образа:
+```bash
+$ docker build -t weisdd/ui:2.0 ./ui
+$ docker images
+REPOSITORY          TAG                 IMAGE ID            CREATED              SIZE
+weisdd/ui           2.0                 0bab01157f90        About a minute ago   402MB
+weisdd/ui           1.0                 29a58be9410f        27 minutes ago       995MB
+```
+
+### Задание со * (стр. 19)
+Задание:
+Попробуйте собрать образ на основе Alpine Linux.
+Придумайте еще способы уменьшить размер образа.
+Можете реализовать как только для UI сервиса, так и для остальных (post, comment).
+Все оптимизации проводите в Dockerfile сервиса.
+Дополнительные варианты решения уменьшения размера образов можете оформить в виде файла Dockerfile.<цифра> в папке сервиса.
+
+Решение:
+#### ui/Dockerfile
+После перехода на Alpine образ уменьшился вдвое:
+```bash
+$ docker images
+REPOSITORY          TAG                 IMAGE ID            CREATED             SIZE
+weisdd/ui           2.0                 0bab01157f90        About an hour ago   402MB
+weisdd/ui           1.0                 29a58be9410f        2 hours ago         995MB
+```
+
+```dockerfile
+FROM alpine:3.9.4
+
+RUN apk update && apk add --no-cache build-base ruby-full ruby-dev ruby-bundler \
+	&& gem install bundler --no-ri --no-rdoc
+
+ENV APP_HOME /app
+RUN mkdir $APP_HOME
+
+WORKDIR $APP_HOME
+COPY Gemfile* $APP_HOME/
+RUN bundle install
+COPY . $APP_HOME
+
+ENV POST_SERVICE_HOST post
+ENV POST_SERVICE_PORT 5000
+ENV COMMENT_SERVICE_HOST comment
+ENV COMMENT_SERVICE_PORT 9292
+
+CMD ["puma"]
+```
+
+Более полная оптимизация:
+- ruby вместо ruby-full (соответственно, нужно ставить отдельные компоненты вроде ruby-json);
+- комбинирование всех команд, связанных с установкой приложения, в одну инструкцию RUN, что позволяет удалить build-base и ruby-dev после сборки приложения.
+
+```dockerfile
+FROM alpine:3.9.4
+
+ENV APP_HOME /app
+RUN mkdir $APP_HOME
+WORKDIR $APP_HOME
+COPY . $APP_HOME
+
+RUN apk update && apk add --no-cache build-base ruby ruby-json ruby-dev ruby-bundler \
+	&& gem install bundler --no-ri --no-rdoc \
+	&& bundle install \
+	&& apk del build-base ruby-dev
+
+ENV POST_SERVICE_HOST post
+ENV POST_SERVICE_PORT 5000
+ENV COMMENT_SERVICE_HOST comment
+ENV COMMENT_SERVICE_PORT 9292
+
+CMD ["puma"]
+```
+
+Таким образом, мы уменьшили размер образа с 995MB до 67.9MB:
+```bash
+$ docker build -t weisdd/ui:2.3 ./ui
+$ docker images
+REPOSITORY          TAG                 IMAGE ID            CREATED             SIZE
+weisdd/ui           2.3                 580d3a9549ee        45 seconds ago      67.9MB
+```
+
+В целом, миграция с ruby-full на ruby+отдельные компоненты не даёт большого выйгрыша в дисковом пространстве. При этом поддержка образа усложняется, поскольку при включении в приложение дополнительного компонента (в процессе разработки) придётся выполнять пересборку. Но для эксперимента сгодится.
+
+#### comment/Dockerfile
+Версия с ruby-full (69.2MB):
+```dockerfile
+FROM alpine:3.9.4
+
+ENV APP_HOME /app
+RUN mkdir $APP_HOME
+WORKDIR $APP_HOME
+COPY . $APP_HOME
+
+RUN apk update && apk add --no-cache build-base ruby-full ruby-dev ruby-bundler \
+	&& gem install bundler --no-ri --no-rdoc \
+	&& bundle install \
+	&& apk del build-base ruby-dev
+
+ENV COMMENT_DATABASE_HOST comment_db
+ENV COMMENT_DATABASE comments
+
+CMD ["puma"]
+```
+
+Версия с ruby + отдельными компонентами (65.1MB):
+```dockerfile
+FROM alpine:3.9.4
+
+ENV APP_HOME /app
+RUN mkdir $APP_HOME
+WORKDIR $APP_HOME
+COPY . $APP_HOME
+
+RUN apk update && apk add --no-cache build-base ruby ruby-json ruby-bigdecimal ruby-dev ruby-bundler \
+	&& gem install bundler --no-ri --no-rdoc \
+	&& bundle install \
+	&& apk del build-base ruby-dev
+
+ENV COMMENT_DATABASE_HOST comment_db
+ENV COMMENT_DATABASE comments
+
+CMD ["puma"]
+```
+
+#### Запуск приложения
+После внесённых изменений, приложение можно запустить набором из следующих команд:
+```bash
+$ docker run -d --network=reddit --network-alias=post_db --network-alias=comment_db mongo:latest
+$ docker run -d --network=reddit --network-alias=post weisdd/post:1.0
+$ docker run -d --network=reddit --network-alias=comment weisdd/comment:2.1
+$ docker run -d --rm --network=reddit -p 9292:9292 weisdd/ui:2.3
+```
+
+### Подключение volume к MongoDB
+```bash
+$ docker volume create reddit_db
+reddit_db
+```
+
+```bash
+$ docker run -d --network=reddit --network-alias=post_db --network-alias=comment_db -v reddit_db:/data/db mongo:latest
+$ docker run -d --network=reddit --network-alias=post weisdd/post:1.0
+$ docker run -d --network=reddit --network-alias=comment weisdd/comment:2.1
+$ docker run -d --rm --network=reddit -p 9292:9292 weisdd/ui:2.3
+```
