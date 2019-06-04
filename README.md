@@ -82,7 +82,6 @@ eval $(docker-machine env --unset)
 docker-machine rm <имя>
 ```
 
-
 ### Подготовка Dockerfile
 Для полного описания контейнера нам потребуются следующие файлы:
 * Dockerfile
@@ -838,4 +837,370 @@ $ docker run -d --network=reddit --network-alias=post_db --network-alias=comment
 $ docker run -d --network=reddit --network-alias=post weisdd/post:1.0
 $ docker run -d --network=reddit --network-alias=comment weisdd/comment:2.1
 $ docker run -d --rm --network=reddit -p 9292:9292 weisdd/ui:2.3
+```
+
+
+## HW#17 (docker-4)
+В данной работе мы:
+* изучили особенности работы с сетями в Docker;
+* опробовали docker-compose;
+* параметризировали docker-compose.yml через .env файл;
+* переопределили базовое имя проекта;
+* при помощи docker-compose.override.yml добавили следующие возможности (*):
+  - изменять код каждого из приложений, не выполняя сборку образа;
+  - запускать puma для руби приложений в дебаг-режиме с двумя воркерами (флаги --debug и -w 2)
+
+### None network driver
+```bash
+$ docker run -ti --rm --network none joffotron/docker-net-tools -c ifconfig
+```
+В данном случае в контейнере будет только интерфейс lo.
+
+### Host network driver
+```bash
+docker run --network host -d nginx
+```
+В данном случае будет использоваться namespace хоста.
+
+На стр. 11 было предложено выполнить вышеуказанную команду несколько раз и изучить результат. - В итоге оказался запущенным только первый контейнер, поскольку каждый последующий пытался использовать уже занятый порт:
+
+```bash
+$ docker ps -a
+CONTAINER ID        IMAGE               COMMAND                  CREATED             STATUS                      PORTS               NAMES
+7570632fd416        nginx               "nginx -g 'daemon of…"   14 seconds ago      Exited (1) 11 seconds ago                       goofy_mclean
+e02b2bd6889a        nginx               "nginx -g 'daemon of…"   23 seconds ago      Exited (1) 20 seconds ago                       clever_mahavira
+4f7d9625ffa0        nginx               "nginx -g 'daemon of…"   34 seconds ago      Up 32 seconds                                   priceless_goldstine
+
+$ docker logs e02b2bd6889a
+2019/06/03 21:19:21 [emerg] 1#1: bind() to 0.0.0.0:80 failed (98: Address already in use)
+nginx: [emerg] bind() to 0.0.0.0:80 failed (98: Address already in use)
+2019/06/03 21:19:21 [emerg] 1#1: bind() to 0.0.0.0:80 failed (98: Address already in use)
+nginx: [emerg] bind() to 0.0.0.0:80 failed (98: Address already in use)
+2019/06/03 21:19:21 [emerg] 1#1: bind() to 0.0.0.0:80 failed (98: Address already in use)
+nginx: [emerg] bind() to 0.0.0.0:80 failed (98: Address already in use)
+2019/06/03 21:19:21 [emerg] 1#1: bind() to 0.0.0.0:80 failed (98: Address already in use)
+nginx: [emerg] bind() to 0.0.0.0:80 failed (98: Address already in use)
+2019/06/03 21:19:21 [emerg] 1#1: bind() to 0.0.0.0:80 failed (98: Address already in use)
+nginx: [emerg] bind() to 0.0.0.0:80 failed (98: Address already in use)
+2019/06/03 21:19:21 [emerg] 1#1: still could not bind()
+nginx: [emerg] still could not bind()
+```
+
+### Bridge network driver
+```bash
+docker network create reddit --driver bridge
+```
+--driver bridge можно не указывать, т.к. это - опция по умолчанию.
+
+Интересной особенностью является тот факт, что при инициализации контейнера к нему можно подключить только одну сеть, тогда как нам необходимо использовать несколько:
+```bash
+$ docker run -d --network=front_net -p 9292:9292 --name ui weisdd/ui:1.0
+$ docker run -d --network=back_net --name comment weisdd/comment:1.0
+$ docker run -d --network=back_net --name post weisdd/post:1.0
+$ docker run -d --network=back_net --name mongo_db --network-alias=post_db --network-alias=comment_db mongo:latest
+
+```
+Дополнительные сети подключаются отдельной командой:
+```bash
+$ docker network connect front_net post
+$ docker network connect front_net comment
+```
+
+Список всех сетей можно вывести следующим образом:
+```bash
+docker-user@docker-host:~$ sudo docker network ls
+NETWORK ID          NAME                DRIVER              SCOPE
+b9b5b1434f86        back_net            bridge              local
+b85ca48c0c17        bridge              bridge              local
+ff21730503d4        front_net           bridge              local
+67dc6e20baac        host                host                local
+01e8073f021f        none                null                local
+e5f24ec1dd5d        reddit              bridge              local
+```
+
+Каждой bridge-сети будет соответствовать отдельный интерфейс:
+```bash
+docker-user@docker-host:~$ ifconfig | grep br
+br-b9b5b1434f86 Link encap:Ethernet  HWaddr 02:42:22:16:32:a2  
+br-e5f24ec1dd5d Link encap:Ethernet  HWaddr 02:42:23:6b:b7:a6  
+br-ff21730503d4 Link encap:Ethernet  HWaddr 02:42:aa:ab:90:a3  
+
+docker-user@docker-host:~$ brctl show br-b9b5b1434f86
+bridge name	bridge id		STP enabled	interfaces
+br-b9b5b1434f86		8000.0242221632a2	no		veth0b4f90a
+							veth6340764
+							vethb631212
+docker-user@docker-host:~$ brctl show br-ff21730503d4 
+bridge name	bridge id		STP enabled	interfaces
+br-ff21730503d4		8000.0242aaab90a3	no		veth7902c28
+							veth7e78ec6
+							veth8f619b0
+```
+
+В iptables существуют соответствующие правила:
+```bash
+$ sudo iptables -nL -t nat
+Chain PREROUTING (policy ACCEPT)
+target     prot opt source               destination         
+DOCKER     all  --  0.0.0.0/0            0.0.0.0/0            ADDRTYPE match dst-type LOCAL
+
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination         
+
+Chain OUTPUT (policy ACCEPT)
+target     prot opt source               destination         
+DOCKER     all  --  0.0.0.0/0           !127.0.0.0/8          ADDRTYPE match dst-type LOCAL
+
+Chain POSTROUTING (policy ACCEPT)
+target     prot opt source               destination         
+MASQUERADE  all  --  10.0.1.0/24          0.0.0.0/0           
+MASQUERADE  all  --  10.0.2.0/24          0.0.0.0/0           
+MASQUERADE  all  --  172.17.0.0/16        0.0.0.0/0           
+MASQUERADE  all  --  172.18.0.0/16        0.0.0.0/0           
+MASQUERADE  tcp  --  10.0.1.2             10.0.1.2             tcp dpt:9292
+
+Chain DOCKER (2 references)
+target     prot opt source               destination         
+RETURN     all  --  0.0.0.0/0            0.0.0.0/0           
+RETURN     all  --  0.0.0.0/0            0.0.0.0/0           
+RETURN     all  --  0.0.0.0/0            0.0.0.0/0           
+RETURN     all  --  0.0.0.0/0            0.0.0.0/0           
+DNAT       tcp  --  0.0.0.0/0            0.0.0.0/0            tcp dpt:9292 to:10.0.1.2:9292
+```
+- в цепочке POSTROUTING мы видим правила NAT'а для каждой подсети + проброс порта. 
+
+Для выставленных наружу портов (в данном случае - 9292) мы видим процесс docker-proxy:
+```bash
+docker-user@docker-host:~$ ps ax | grep docker-proxy
+ 7705 ?        Sl     0:00 /usr/bin/docker-proxy -proto tcp -host-ip 0.0.0.0 -host-port 9292 -container-ip 10.0.1.2 -container-port 9292
+10982 pts/0    S+     0:00 grep --color=auto docker-proxy
+```
+
+### docker-compose
+docker-compose поддерживает интерполяцию переменных окружения, при этом можно использовать как export, так и специальный файл .env (об этом позже):
+```bash
+$ export USERNAME=weisdd
+$ weisdd_microservices/src$ docker-compose up -d
+Creating network "src_reddit" with the default driver
+Creating volume "src_post_db" with default driver
+Pulling post_db (mongo:3.2)...
+[...]
+Status: Downloaded newer image for mongo:3.2
+Creating src_ui_1      ... done
+Creating src_post_db_1 ... done
+Creating src_post_1    ... done
+Creating src_comment_1 ... done
+
+ibeliako@dev:~/devops/git/weisdd_microservices/src$ docker-compose ps
+    Name                  Command             State           Ports         
+----------------------------------------------------------------------------
+src_comment_1   puma                          Up                            
+src_post_1      python3 post_app.py           Up                            
+src_post_db_1   docker-entrypoint.sh mongod   Up      27017/tcp             
+src_ui_1        puma                          Up      0.0.0.0:9292->9292/tcp
+```
+
+### Задание (стр. 35)
+Задача 1:
+Изменить docker-compose под кейс с множеством сетей, сетевых алиасов (стр 18)
+
+Решение:
+```dockerfile
+version: '3.3'
+services:
+  post_db:
+    image: mongo:3.2
+    volumes:
+      - post_db:/data/db
+    networks:
+      back_net:
+        aliases:
+          - comment_db
+  ui:
+    build: ./ui
+    image: ${USERNAME}/ui:1.0
+    ports:
+      - 9292:9292/tcp
+    networks:
+      - front_net
+  post:
+    build: ./post-py
+    image: ${USERNAME}/post:1.0
+    networks:
+      - back_net
+      - front_net
+  comment:
+    build: ./comment
+    image: ${USERNAME}/comment:1.0
+    networks:
+      - back_net
+      - front_net
+
+volumes:
+  post_db:
+
+networks:
+  back_net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.0.2.0/24
+  front_net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.0.1.0/24
+```
+**ВАЖНО**: На слайдах была ошибка в описании docker-compose - отсутствует алиас для comment_db, поэтому работает всё, кроме комментариев. В решении выше, эта ошибка исправлена.
+
+Задача 2:
+Параметризуйте с помощью переменных окружений:
+* порт публикации сервиса ui
+* версии сервисов
+* возможно что-либо еще на ваше усмотрение
+Параметризованные параметры запишите в отдельный файл c расширением .env
+Без использования команд source и export docker-compose должен подхватить переменные из этого файла.
+
+Решение:
+docker-compose.yml
+```dockerfile
+version: '3.3'
+services:
+  post_db:
+    image: mongo:3.2
+    volumes:
+      - post_db:/data/db
+    networks:
+      back_net:
+        aliases:
+          - comment_db
+  ui:
+    build: ./ui
+    image: ${USERNAME}/ui:${UI_VERSION}
+    ports:
+      - ${UI_PORT}:9292/tcp
+    networks:
+      - front_net
+  post:
+    build: ./post-py
+    image: ${USERNAME}/post:${POST_VERSION}
+    networks:
+      - back_net
+      - front_net
+  comment:
+    build: ./comment
+    image: ${USERNAME}/comment:${COMMENT_VERSION}
+    networks:
+      - back_net
+      - front_net
+
+volumes:
+  post_db:
+
+networks:
+  back_net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.0.2.0/24
+  front_net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.0.1.0/24
+```
+
+https://docs.docker.com/compose/environment-variables/#the-env-file
+.env
+```bash
+weisdd_microservices/src$ cat env
+USERNAME=weisdd
+UI_PORT=9292
+UI_VERSION=1.0
+POST_VERSION=1.0
+COMMENT_VERSION=1.0
+```
+
+### Задание (стр. 36)
+Задание:
+Узнайте как образуется базовое имя проекта.
+
+Решение:
+Структура имени: project_service_index_slug, где slug - случайно сгенерированное шестнадцатиричное число. 
+
+Задание:
+Можно ли его задать? Если можно то как?
+
+Решение:
+Имя можно переопределить при помощи специальной переменной окружения COMPOSE_PROJECT_NAME (её можно также внести в файл .env). Пример:
+
+```bash
+export COMPOSE_PROJECT_NAME=test
+
+weisdd_microservices/src$ docker-compose up -d
+Creating network "test_back_net" with driver "bridge"
+Creating network "test_front_net" with driver "bridge"
+Creating volume "test_post_db" with default driver
+Creating test_post_1    ... done
+Creating test_post_db_1 ... done
+Creating test_comment_1 ... done
+Creating test_ui_1      ... done
+```
+
+### Задание со * (стр. 37)
+Задание:
+Создайте docker-compose.override.yml для reddit проекта, который позволит:
+* Изменять код каждого из приложений, не выполняя сборку образа;
+* Запускать puma для руби приложений в дебаг режиме с двумя воркерами (флаги --debug и -w 2).
+
+Решение:
+https://docs.docker.com/compose/extends/
+
+weisdd_microservices/src/docker-compose.override.yml 
+```dockerfile
+version: '3.3'
+
+services:
+  ui:
+    command: puma --debug -w 2
+    volumes:
+      - app_ui:/app
+
+  post:
+    volumes:
+      - app_post:/app
+
+  comment:
+    command: puma --debug -w 2
+    volumes:
+      - app_comment:/app
+
+volumes:
+  app_ui:
+  app_comment:
+  app_post:
+```
+- инструкция command переопределяет CMD, указанное в Dockerfile;
+- для каждого каталога с приложением создан отдельный volume.
+
+Проверка:
+```bash
+$ docker ps
+CONTAINER ID        IMAGE                COMMAND                  CREATED             STATUS              PORTS                    NAMES
+b3479d2afabe        mongo:3.2            "docker-entrypoint.s…"   47 seconds ago      Up 44 seconds       27017/tcp                src_post_db_1
+c63dba23b2fb        weisdd/post:1.0      "python3 post_app.py"    47 seconds ago      Up 43 seconds                                src_post_1
+fe962f5e8ff7        weisdd/ui:1.0        "puma --debug -w 2"      47 seconds ago      Up 44 seconds       0.0.0.0:9292->9292/tcp   src_ui_1
+cd046c798596        weisdd/comment:1.0   "puma --debug -w 2"      47 seconds ago      Up 43 seconds                                src_comment_1
+ib
+
+$ docker volume ls | egrep 'DRIVER|src'
+DRIVER              VOLUME NAME
+local               src_app_comment
+local               src_app_post
+local               src_app_ui
+local               src_post_db
 ```
