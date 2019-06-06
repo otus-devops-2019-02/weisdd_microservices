@@ -1,9 +1,0 @@
-{
-  "project_id": "docker-12345",
-  "source_image_family": "ubuntu-1804-lts",
-  "machine_type": "f1-micro",
-  "image_description": "base image for docker host",
-  "disk_size": "10",
-  "network": "default",
-  "tags": "docker-host"
-}
