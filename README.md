@@ -1204,3 +1204,177 @@ local               src_app_post
 local               src_app_ui
 local               src_post_db
 ```
+
+
+## HW#18 (gitlab-ci-1)
+В данной работе мы:
+* подготовили инсталляцию Gitlab CI;
+* подготовили репозиторий с кодом приложения;
+* описали этапы пайплайна;
+* определили окружения.
+
+### Gitlab CI Omnibus
+gitlab-ci/docker-compose.yml
+```dockerfile
+web:
+  image: 'gitlab/gitlab-ce:latest'
+  restart: always
+  hostname: 'gitlab.example.com'
+  environment:
+    GITLAB_OMNIBUS_CONFIG: |
+      external_url 'http://35.195.71.152/'
+  ports:
+    - '80:80'
+    - '443:443'
+    - '2222:22'
+  volumes:
+    - '/srv/gitlab/config:/etc/gitlab'
+    - '/srv/gitlab/logs:/var/log/gitlab'
+    - '/srv/gitlab/data:/var/opt/gitlab'
+```
+
+```bash
+# docker-compose up -d
+```
+
+### Работа с репозиторием Gitlab
+Подключение удалённого репозитория:
+```bash
+$ git checkout -b gitlab-ci-1
+$ git remote add gitlab http://35.195.71.152/homework/example.git
+$ git push gitlab gitlab-ci-1
+```
+
+### Gitlab Runner
+Запуск:
+```bash
+# docker run -d --name gitlab-runner --restart always -v /srv/gitlab-runner/config:/etc/gitlab-runner -v /var/run/docker.sock:/var/run/docker.sock gitlab/gitlab-runner:latest
+```
+
+Регистрация:
+```bash
+root@gitlab-ci:/srv/gitlab#  docker exec -it gitlab-runner gitlab-runner register --run-untagged --locked=false
+Runtime platform                                    arch=amd64 os=linux pid=11 revision=ac2a293c version=11.11.2
+Running in system-mode.                            
+                                                   
+Please enter the gitlab-ci coordinator URL (e.g. https://gitlab.com/):
+http://35.195.71.152/
+Please enter the gitlab-ci token for this runner:
+FBVa-1qHjxLsKHDDbjd2
+Please enter the gitlab-ci description for this runner:
+[4bbf73c19c89]: my-runner
+Please enter the gitlab-ci tags for this runner (comma separated):
+linux,xenial,ubuntu,docker
+Registering runner... succeeded                     runner=FBVa-1qH
+Please enter the executor: ssh, docker-ssh+machine, kubernetes, docker, docker-ssh, parallels, shell, virtualbox, docker+machine:
+docker
+Please enter the default Docker image (e.g. ruby:2.1):
+alpine:latest
+Runner registered successfully. Feel free to start it, but if it's running already the config should be automatically reloaded!
+```
+
+Как вариант, можно регистрировать Runner в неинтерактивном режиме:
+```bash
+sudo docker exec gitlab-runner gitlab-runner register --run-untagged --locked=false --non-interactive --executor "docker" --docker-image alpine:latest --url "http://35.195.71.152/"   --registration-token "FBVa-1qHjxLsKHDDbjd2" --description "docker-runner" --tag-list "docker,linux" --run-untagged="true"
+```
+
+### Pipeline
+```yaml
+image: ruby:2.4.2
+
+stages:
+  - build
+  - test
+  - review
+  - stage
+  - production
+
+variables:
+  DATABASE_URL: 'mongodb://mongo/user_posts'
+
+before_script:
+  - cd reddit
+  - bundle install
+
+build_job:
+  stage: build
+  script:
+    - echo 'Building'
+
+test_unit_job:
+  stage: test
+  services:
+  - mongo:latest
+  script:
+  - ruby simpletest.rb
+
+test_integration_job:
+  stage: test
+  script:
+    - echo 'Testing 2'
+
+deploy_dev_job:
+  stage: review
+  script:
+    - echo 'Deploy'
+  environment:
+    name: dev
+    url: http://dev.example.com
+
+branch review:
+  stage: review
+  script: echo "Deploy to $CI_ENVIRONMENT_SLUG"
+  environment:
+    name: branch/$CI_COMMIT_REF_NAME
+    url: http://$CI_ENVIRONMENT_SLUG.example.com
+  only:
+    - branches
+  except:
+    - master
+
+staging:
+  stage: stage
+  when: manual
+  only:
+    - /^\d+\.\d+\.\d+/
+  script:
+    - echo 'Deploy'
+  environment:
+    name: stage
+    url: https://beta.example.com
+
+production:
+ stage: production
+ when: manual
+ only:
+   - /^\d+\.\d+\.\d+/
+ script:
+   - echo 'Deploy'
+ environment:
+   name: production
+   url: https://example.com
+```
+Здесь у нас есть несколько этапов:
+* build;
+* test;
+* review;
+* stage;
+* production.
+При этом, два последних будут предложены только в том случае, если к коммиту добавлен тэг с версией (ограничение указывается в секции only):
+```bash
+git commit -a -m ‘#4 add logout button to profile page’
+git tag 2.4.10
+git push gitlab gitlab-ci-1 --tags
+```
+Само выполнение этих этапов - ручное (when: manual).
+В секции branch review у нас настроено динамическое создание окружений для всех веток кроме master:
+```yaml
+  environment:
+    name: branch/$CI_COMMIT_REF_NAME
+    url: http://$CI_ENVIRONMENT_SLUG.example.com
+  only:
+    - branches
+  except:
+    - master
+```
+ВАЖНО: В слайдах было неправильно написано - environment появляется не в CI/CD, а в Operations -> Environments
