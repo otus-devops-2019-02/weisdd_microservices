@@ -1378,3 +1378,287 @@ git push gitlab gitlab-ci-1 --tags
     - master
 ```
 ВАЖНО: В слайдах было неправильно написано - environment появляется не в CI/CD, а в Operations -> Environments
+
+
+## HW#20 (monitoring-1)
+В данной работе мы:
+* познакомились с Prometheus;
+* настроили мониторинг состояния микросервисов;
+* подключили node exporter;
+* подключили mongodb и blackbox exporters (*).
+
+### Собираем образ для prometheus
+monitoring/prometheus/Dockerfile
+```dockerfile
+FROM prom/prometheus:v2.1.0
+ADD prometheus.yml /etc/prometheus/
+```
+
+monitoring/prometheus/prometheus.yaml
+```yaml
+---
+global:
+  scrape_interval: '5s'
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets:
+        - 'localhost:9090'
+
+  - job_name: 'ui'
+    static_configs:
+      - targets:
+        - 'ui:9292'
+
+  - job_name: 'comment'
+    static_configs:
+      - targets:
+        - 'comment:9292'
+```
+
+```bash
+$ export USER_NAME=weisdd
+$ docker build -t $USER_NAME/prometheus .
+```
+
+### Обновлённый docker/docker-compose.yml
+Обновленный docker/docker-compose.yml:
+```dockerfile
+version: '3.3'
+services:
+  post_db:
+    image: mongo:3.2
+    volumes:
+      - post_db:/data/db
+    networks:
+      back_net:
+        aliases:
+          - comment_db
+  ui:
+#    build: ./ui
+    image: ${USERNAME}/ui:${UI_VERSION}
+    ports:
+      - ${UI_PORT}:9292/tcp
+    networks:
+      - front_net
+  post:
+#    build: ./post-py
+    image: ${USERNAME}/post:${POST_VERSION}
+    networks:
+      - back_net
+      - front_net
+  comment:
+#    build: ./comment
+    image: ${USERNAME}/comment:${COMMENT_VERSION}
+    networks:
+      - back_net
+      - front_net
+  prometheus:
+    image: ${USERNAME}/prometheus
+    ports:
+      - '9090:9090'
+    volumes:
+      - prometheus_data:/prometheus
+    networks:
+      - back_net
+      - front_net
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention=1d'
+
+volumes:
+  post_db:
+  prometheus_data:
+
+networks:
+  back_net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.0.2.0/24
+  front_net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.0.1.0/24
+```
+
+### Node exporter
+Для сбора метрик c docker-host необходимо использовать node-exporter. Настраивается следующим образом:
+
+docker/docker-compose.yml:
+```dockerfile
+services
+  node-exporter:
+    image: prom/node-exporter:v0.15.2
+    user: root
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - back_net
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.ignored-mount-points="^/(sys|proc|dev|host|etc)($$|/)"'
+```
+
+monitoring/prometheus/prometheus.yaml
+```yaml
+  - job_name: 'node'
+    static_configs:
+      - targets:
+        - 'node-exporter:9100'
+```
+
+После этого необходимо пересобрать образ и перезапустить контейнеры через docker-compose.
+
+Важно: На слайде 45 была некорректная конфигурация для node-exporter - он не был подключен ни к какой сети, соответственно, не резолвился через docker dns. Фикс:
+    networks:
+      - back_net
+Также, команда, которая была указана для пересборки образа prometheus не учитывала, что поскольку менялось только содержимое yml-файла, соответствующий слой всегда будет браться из кэша. Поэтому необходимо при сборке добавлять --no-cache
+```bash
+monitoring/prometheus$ docker build --no-cache -t $USER_NAME/prometheus .
+```
+
+### Ссылка на docker hub
+https://hub.docker.com/u/weisdd
+
+### Задание со * (стр. 49)
+Задание:
+Добавьте в Prometheus мониторинг MongoDB с использованием необходимого экспортера.
+* Версию образа экспортера нужно фиксировать на последнюю стабильную
+* Если будете добавлять для него Dockerfile, он должен быть в директории monitoring, а не в корне репозитория.
+P.S. Проект dcu/mongodb_exporter не самый лучший вариант, т.к. у него есть проблемы с поддержкой (не обновляется)
+
+Решение:
+Раз уж dcu/mongodb_exporter было рекомендовано не использовать, эксперимента ради выбрал форк:
+https://github.com/percona/mongodb_exporter/
+Для снижения размера образа использовал multi-stage сборку:
+```dockerfile
+FROM golang:1.12.5 AS builder
+
+ENV APPPATH $GOPATH/src/github.com/percona/mongodb_exporter
+
+WORKDIR $APPPATH
+
+RUN git clone -b v0.7.0 "https://github.com/percona/mongodb_exporter" "$APPPATH" \
+    && go get -d && CGO_ENABLED=0 GOOS=linux go build -o /bin/mongodb_exporter \
+    && rm -rf "$GOPATH"
+
+FROM alpine:3.9.4
+ENV MONGODB_URI mongodb://post_db:27017
+#EXPOSE 9216
+COPY --from=builder /bin/mongodb_exporter /bin/mongodb_exporter
+
+ENTRYPOINT [ "/bin/mongodb_exporter" ]
+```
+ВАЖНО: Для Alpine необходимо использовать статическую компиляцию Go, иначе mongodb_exporter будет вылетать с ошибкой.
+```bash
+CGO_ENABLED=0 GOOS=linux go build -o /bin/mongodb_exporter
+```
+Немного подробнее:
+https://github.com/gin-gonic/gin/issues/1178
+
+Собираем образ:
+```bash
+monitoring/mongodb_exporter$ docker build -t weisdd/mongodb_exporter . --no-cache
+```
+
+В наш docker-compose добавляем следующее содержимое
+docker/docker-compose.yml:
+```dockerfile
+services
+  mongodb_exporter:
+    image: ${USERNAME}/mongodb_exporter:${MONGODB_EXPORTER_VERSION}
+    environment:
+      - MONGODB_URI=${MONGODB_URI}
+    ports:
+      - '9216:9216'
+    networks:
+      - back_net
+```
+
+docker/env
+```yaml
+MONGODB_EXPORTER_VERSION=latest
+MONGODB_URI=mongodb://post_db:27017
+```
+ВАЖНО: Как выяснилось, этот exporter не умеет парсить кавычки/апострофы. Соответственно, если указать MONGODB_URI='mongodb://post_db:27017' / MONGODB_URI="mongodb://post_db:27017" / MONGODB_URI="${MONGODB_URI}", то подключиться он не сможет.
+
+Дополняем конфигурацию prometheus и пересобираем образ:
+monitoring/prometheus/prometheus.yaml
+```yaml
+  - job_name: 'mongodb'
+    static_configs:
+      - targets:
+        - 'mongodb_exporter:9216'
+```
+
+```bash
+monitoring/prometheus$ docker build --no-cache -t $USER_NAME/prometheus .
+```
+
+### Задание со * (стр. 50)
+Задание:
+Добавьте в Prometheus мониторинг сервисов comment, post, ui с помощью blackbox экспортера.
+Blackbox exporter позволяет реализовать для Prometheus мониторинг по принципу черного ящика. Т.е. например мы можем проверить отвечает ли сервис по http, или принимает ли соединения порт.
+* Версию образа экспортера нужно фиксировать на последнюю стабильную
+* Если будете добавлять для него Dockerfile, он должен быть в директории monitoring, а не в корне репозитория.
+Вместо blackbox_exporter можете попробовать использовать Cloudprober от Google.
+
+Решение:
+Для blackbox использовался образ из docker hub:
+docker/docker-compose.yml:
+```dockerfile
+services
+  blackbox-exporter:
+    image: prom/blackbox-exporter:${BLACKBOX_EXPORTER_VERSION}
+    networks:
+      - front_net
+      - back_net
+```
+
+docker/env
+```yaml
+BLACKBOX_EXPORTER_VERSION=v0.14.0
+```
+
+Дополняем конфигурацию prometheus и пересобираем образ:
+monitoring/prometheus/prometheus.yaml
+```yaml
+  - job_name: 'blackbox'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://comment:9292/metrics
+          - http://post:9292/metrics
+          - http://ui:9292/metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+```
+
+```bash
+monitoring/prometheus$ docker build --no-cache -t $USER_NAME/prometheus .
+```
+
+Результаты у нас следующие:
+```
+probe_http_status_code{instance="http://comment:9292/metrics",job="blackbox"}	200
+probe_http_status_code{instance="http://post:9292/metrics",job="blackbox"}	0
+probe_http_status_code{instance="http://ui:9292/metrics",job="blackbox"}	200
+```
+т.к. у post нет /metrics, да и вообще не прослушивается порт 9292, статус 0.
+Если для comment не указывать /metrics, то получим 404 (Not Found).

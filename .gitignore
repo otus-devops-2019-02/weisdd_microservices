@@ -7,7 +7,7 @@
 *.terraform.tfstate.lock.info
 
 # Packer
-/docker-monolith/infra/packer/variables.json
+/docker/docker-monolith/infra/packer/variables.json
 
 # My scripts
 *.cache
@@ -30,3 +30,6 @@ inspec.lock
 .molecule
 .cache
 .pytest_cache
+
+# Docker
+*.env
