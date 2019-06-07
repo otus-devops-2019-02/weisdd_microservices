@@ -27,3 +27,20 @@ scrape_configs:
     static_configs:
       - targets:
         - 'mongodb_exporter:9216'
+
+  - job_name: 'blackbox'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://comment:9292/metrics
+          - http://post:9292/metrics
+          - http://ui:9292/metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115

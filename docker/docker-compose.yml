@@ -61,6 +61,11 @@ services:
       - '9216:9216'
     networks:
       - back_net
+  blackbox-exporter:
+    image: prom/blackbox-exporter:${BLACKBOX_EXPORTER_VERSION}
+    networks:
+      - front_net
+      - back_net
 
 volumes:
   post_db:
