@@ -61,7 +61,7 @@
         "x": 0,
         "y": 0
       },
-      "id": 4,
+      "id": 8,
       "legend": {
         "avg": false,
         "current": false,
@@ -85,7 +85,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(comment_count[1h])",
+          "expr": "docker_n_images",
           "format": "time_series",
           "intervalFactor": 1,
           "refId": "A"
@@ -94,7 +94,7 @@
       "thresholds": [],
       "timeFrom": null,
       "timeShift": null,
-      "title": "Comments Rate",
+      "title": "Number of images",
       "tooltip": {
         "shared": true,
         "sort": 0,
@@ -140,7 +140,7 @@
         "x": 0,
         "y": 9
       },
-      "id": 2,
+      "id": 6,
       "legend": {
         "avg": false,
         "current": false,
@@ -164,17 +164,32 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(post_count[1h])",
+          "expr": "docker_n_containers_paused",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
+          "legendFormat": "Paused",
           "refId": "A"
+        },
+        {
+          "expr": "docker_n_containers_stopped",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "Stopped",
+          "refId": "B"
+        },
+        {
+          "expr": "docker_n_containers_running",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "Running",
+          "refId": "C"
         }
       ],
       "thresholds": [],
       "timeFrom": null,
       "timeShift": null,
-      "title": "Posts rate",
+      "title": "Number of containers",
       "tooltip": {
         "shared": true,
         "sort": 0,
@@ -244,7 +259,7 @@
     ]
   },
   "timezone": "",
-  "title": "Business_Logic_Monitoring",
-  "uid": "yFNObMnZz",
-  "version": 2
+  "title": "Telegraf",
+  "uid": "l2_PnVnZk",
+  "version": 8
 }

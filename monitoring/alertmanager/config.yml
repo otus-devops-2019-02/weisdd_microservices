@@ -8,3 +8,6 @@ receivers:
 - name: 'slack-notifications'
   slack_configs:
   - channel: '#igor_beliakov'
+    title: "{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}"
+    text: "{{ range .Alerts }}{{ .Annotations.description }}\n{{ end }}"
+
