@@ -1662,3 +1662,244 @@ probe_http_status_code{instance="http://ui:9292/metrics",job="blackbox"}	200
 ```
 т.к. у post нет /metrics, да и вообще не прослушивается порт 9292, статус 0.
 Если для comment не указывать /metrics, то получим 404 (Not Found).
+
+
+## HW#21 (monitoring-2)
+В данной работе мы:
+* реализовали мониторинг docker-контейнеров;
+* визуализировали метрики;
+* настроили уведомления в slack;
+* сравнили набор метрик для Prometheus в cAdvisor, Docker, Telegraf (*).
+* выполнили автоматический provisioning конфигурации (datasources, dashboards) в Grafana (**). 
+
+### docker-compose-monitoring
+Нам потребовалось вынести конфигурацию docker-compose из docker-compose.yml в docker-compose-monitoring.yml.
+ВАЖНО: поскольку определение volumes и networks учитывается лишь в пределах файла, потребовалось добавить соответствующую часть конфигурации:
+```yaml
+networks:
+  back_net:
+  front_net:
+```
+
+### cAdvisor, Grafana
+Здесь, в общем-то, ничего примечательного - запустили, привязали к Prometheus, создали dashboard в Grafana.
+
+### Самостоятельное задание (стр. 45)
+Задание:
+Используйте для первого графика (UI http requests) функцию rate аналогично второму графику (Rate of UI HTTP Requests with Error)
+
+Решение: rate(ui_request_count[1m])
+
+### Alermanager
+monitoring/alertmanager/Dockerfile
+```dockerfile
+FROM prom/alertmanager:v0.14.0
+ADD config.yml /etc/alertmanager/
+```
+
+monitoring/alertmanager/config.yml
+```yaml
+global:
+  slack_api_url: 'https://hooks.slack.com/services/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'
+
+route:
+  receiver: 'slack-notifications'
+
+receivers:
+- name: 'slack-notifications'
+  slack_configs:
+  - channel: '#igor_beliakov'
+    title: "{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}"
+    text: "{{ range .Alerts }}{{ .Annotations.description }}\n{{ end }}"
+```
+ВАЖНО: в презентации отсутствовала конфигурация для title и text, в следствие чего в Slack приходило сообщение без особо ценной информации.
+
+monitoring/prometheus/Dockerfile
+```dockerfile
+FROM prom/prometheus:v2.1.0
+ADD prometheus.yml /etc/prometheus/
+ADD alerts.yml /etc/prometheus/
+```
+
+monitoring/prometheus/alerts.yml
+```yaml
+groups:
+  - name: alert.rules
+    rules:
+    - alert: InstanceDown
+      expr: up == 0
+      for: 1m
+      labels:
+        severity: page
+      annotations:
+        description: "{{ $labels.instance }} of job {{ $labels.job }} has been down for more than 1 minute"
+        summary: "Instance {{ $labels.instance }} down"
+```
+
+### Задание со * (стр. 71)
+https://docs.docker.com/config/thirdparty/prometheus/
+Задание:
+* В Docker в экспериментальном режиме реализована отдача метрик в формате Prometheus. Добавьте сбор этих метрик в Prometheus. Сравните количество метрик с Cadvisor. Выберите готовый дашборд или создайте свой для этого источника данных. Выгрузите его в monitoring/grafana/dashboards;
+
+Решение:
+/etc/docker/daemon.json 
+```json
+{
+  "metrics-addr" : "10.0.2.1:9323",
+  "experimental" : true
+}
+```
+
+monitoring/prometheus/prometheus.yml
+```yaml
+scrape_configs:
+  - job_name: 'docker'
+    static_configs:
+      - targets:
+        - '10.0.2.1:9323'
+```
+ВАЖНО: в официальной документации предлагалось указать metrics-addr равным 127.0.0.1:9323, но учитывая, что контейнеры у нас запускаются не в сети host, потребовалось изменить адрес на 10.0.2.1 (соответствует bridge-интерфейсу)
+
+Dashboard:
+monitoring/grafana/dashboards/Docker_Engine_Metrics.json
+
+В cAdvisor было 1482 метрики, в docker export - 499. В последнем отсутствует, как минимум, информация по каждому контейнеру в отдельности.
+
+Задание:
+Для сбора метрик с Docker демона также можно использовать Telegraf от InfluxDB. Добавьте сбор этих метрик в Prometheus. Сравните количество метрик с Cadvisor. Выберите готовый дашборд или создайте свой для этого источника данных. Выгрузите его в monitoring/grafana/dashboards;
+
+Решение:
+monitoring/telegraf/telegraf.conf
+```
+[[inputs.docker]]
+  endpoint = "unix:///var/run/docker.sock"
+
+[[outputs.prometheus_client]]
+  listen = ":9273"
+```
+
+monitoring/telegraf/Dockerfile
+```dockerfile
+FROM telegraf:1.9.5-alpine
+COPY telegraf.conf /etc/telegraf/telegraf.conf
+```
+
+docker/docker-compose-monitoring.yml
+```dockerfile
+services:
+  telegraf:
+    image: ${USER_NAME}/telegraf
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - back_net
+```
+
+monitoring/prometheus/prometheus.yml
+```yaml
+---
+scrape_configs:
+  - job_name: 'telegraf'
+    static_configs:
+      - targets:
+        - 'telegraf:9273'
+```
+
+Dashboard:
+monitoring/grafana/dashboards/Telegraf.json
+
+987 метрик (vs. 1482 в cAdvisor)
+
+Задание:
+* Придумайте и реализуйте другие алерты, например на 95 процентиль времени ответа UI, который рассмотрен выше; Настройте интеграцию Alertmanager с e-mail помимо слака;
+
+Решение:
+monitoring/prometheus/alerts.yml
+```yaml
+groups:
+  - name: alert.rules
+    rules:
+    - alert: LackOfSpace
+      expr: node_filesystem_free{mountpoint="/"} / node_filesystem_size * 100 < 20
+      labels:
+        severity: moderate
+      annotations:
+        summary: "Instance {{ $labels.instance }} is low on disk space"
+        description: "On {{ $labels.instance }}, / has only {{ $value | humanize }}% of disk space left"
+```
+
+Пример уведомления:
+AlertManagerAPP [6:31 PM]
+Instance node-exporter:9100 is low on disk space
+On node-exporter:9100, / has only 11.27% of disk space left
+
+Интеграцию с e-mail не настраивал.
+
+### Задание с **
+Выполнено частично.
+
+Задание:
+В Grafana 5.0 была добавлена возможность описать в конфигурационных файлах источники данных и дашборды. Реализуйте автоматическое добавление источника данных и созданных в данном ДЗ дашбордов в графану;
+
+Решение:
+Потребовалось создать отдельный Dockerfile:
+
+monitoring/grafana/Dockerfile
+```dockerfile
+FROM grafana/grafana:5.0.0
+COPY dashboards-providers/providers.yml /etc/grafana/provisioning/dashboards/
+COPY datasources/datasources.yml /etc/grafana/provisioning/datasources/
+COPY dashboards/* /var/lib/grafana/dashboards/
+```
+
+monitoring/grafana/dashboards-providers/providers.yml
+```yaml
+---
+apiVersion: 1
+
+providers:
+  # <string> provider name
+- name: 'default'
+  # <string, required> provider type. Required
+  type: file
+  # <bool> disable dashboard deletion
+  disableDeletion: false
+  # <bool> enable dashboard editing
+  editable: true
+  # <int> how often Grafana will scan for changed dashboards
+  updateIntervalSeconds: 10
+  options:
+    # <string, required> path to dashboard files on disk. Required
+    path: /var/lib/grafana/dashboards
+```
+
+monitoring/grafana/datasources/datasources.yml
+```yaml
+---
+# config file version
+apiVersion: 1
+
+datasources:
+  # <string, required> name of the datasource. Required
+- name: Prometheus Server
+  # <string, required> datasource type. Required
+  type: prometheus
+  # <string, required> access mode. proxy or direct (Server or Browser in the UI). Required
+  access: proxy
+  # <string> url
+  url: http://prometheus:9090/
+  # <string> Deprecated, use secureJsonData.password
+  isDefault: true
+  version: 2
+  # <bool> allow users to edit datasources from the UI.
+  editable: true
+```
+
+ВАЖНО: с экспортированными через web-интерфейс grafana dashboards была обнаружена интересная особенность:
+```
+grafana_1            | t=2019-06-13T12:28:11+0000 lvl=eror msg="failed to save dashboard" logger=provisioning.dashboard type=file name=default error="Invalid alert data. Cannot save dashboard"
+grafana_1            | t=2019-06-13T12:28:11+0000 lvl=info msg="Initializing Alerting" logger=alerting.engine
+grafana_1            | t=2019-06-13T12:28:11+0000 lvl=info msg="Initializing CleanUpService" logger=cleanup
+grafana_1            | t=2019-06-13T12:28:14+0000 lvl=eror msg="failed to save dashboard" logger=provisioning.dashboard type=file name=default error="Invalid alert data. Cannot save dashboard"
+```
+Как выяснилось, в json-файлах фигурировали переменные ${DS_PROMETHEUS} и ${DS_PROMETHEUS_SERVER} в параметре datasource. Потребовалось изменить их значения на "Prometheus Server" (соответствует содержимому monitoring/grafana/datasources/datasources.yml).

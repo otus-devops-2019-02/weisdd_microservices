@@ -1,0 +1,13 @@
+global:
+  slack_api_url: 'https://hooks.slack.com/services/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'
+
+route:
+  receiver: 'slack-notifications'
+
+receivers:
+- name: 'slack-notifications'
+  slack_configs:
+  - channel: '#igor_beliakov'
+    title: "{{ range .Alerts }}{{ .Annotations.summary }}\n{{ end }}"
+    text: "{{ range .Alerts }}{{ .Annotations.description }}\n{{ end }}"
+

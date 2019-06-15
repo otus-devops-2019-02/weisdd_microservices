@@ -1,0 +1,87 @@
+version: '3.3'
+services:
+  cadvisor:
+    image: google/cadvisor:v0.29.0
+    volumes:
+      - '/:/rootfs:ro'
+      - '/var/run:/var/run:rw'
+      - '/sys:/sys:ro'
+      - '/var/lib/docker/:/var/lib/docker:ro'
+    ports:
+      - '8080:8080'
+    networks:
+      - back_net
+  prometheus:
+    image: ${USER_NAME}/prometheus
+    ports:
+      - '9090:9090'
+    volumes:
+      - prometheus_data:/prometheus
+    networks:
+      - back_net
+      - front_net
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention=1d'
+  node-exporter:
+    image: prom/node-exporter:v0.15.2
+    user: root
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - back_net
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.ignored-mount-points="^/(sys|proc|dev|host|etc)($$|/)"'
+  mongodb_exporter:
+    image: ${USER_NAME}/mongodb_exporter:${MONGODB_EXPORTER_VERSION}
+    environment:
+      - MONGODB_URI=${MONGODB_URI}
+    ports:
+      - '9216:9216'
+    networks:
+      - back_net
+  blackbox-exporter:
+    image: prom/blackbox-exporter:${BLACKBOX_EXPORTER_VERSION}
+    networks:
+      - front_net
+      - back_net
+  grafana:
+    image: ${USER_NAME}/grafana:latest
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=secret
+    depends_on:
+      - prometheus
+    ports:
+      - 3000:3000
+    networks:
+      - back_net
+  alertmanager:
+    image: ${USER_NAME}/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/config.yml'
+    ports:
+      - 9093:9093
+    networks:
+      - back_net
+  telegraf:
+    image: ${USER_NAME}/telegraf
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - back_net
+
+volumes:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  back_net:
+  front_net:

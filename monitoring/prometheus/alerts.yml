@@ -1,0 +1,18 @@
+groups:
+  - name: alert.rules
+    rules:
+    - alert: InstanceDown
+      expr: up == 0
+      for: 1m
+      labels:
+        severity: page
+      annotations:
+        description: "{{ $labels.instance }} of job {{ $labels.job }} has been down for more than 1 minute"
+        summary: "Instance {{ $labels.instance }} down"
+    - alert: LackOfSpace
+      expr: node_filesystem_free{mountpoint="/"} / node_filesystem_size * 100 < 20
+      labels:
+        severity: moderate
+      annotations:
+        summary: "Instance {{ $labels.instance }} is low on disk space"
+        description: "On {{ $labels.instance }}, / has only {{ $value | humanize }}% of disk space left"
