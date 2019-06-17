@@ -1905,7 +1905,7 @@ grafana_1            | t=2019-06-13T12:28:14+0000 lvl=eror msg="failed to save d
 Как выяснилось, в json-файлах фигурировали переменные ${DS_PROMETHEUS} и ${DS_PROMETHEUS_SERVER} в параметре datasource. Потребовалось изменить их значения на "Prometheus Server" (соответствует содержимому monitoring/grafana/datasources/datasources.yml).
 
 
-## HW#21 (logging-1)
+## HW#23 (logging-1)
 В данной работе мы:
 * познакомились с особенностями сбора структурированных и неструктурированных логов (EFK);
 * рассмотрели распределенную трасировку (zipkin).
