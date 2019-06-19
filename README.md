@@ -2253,7 +2253,7 @@ time.sleep(3)
 ```
 
 
-## HW#24 (kubernetes-1)
+## HW#25 (kubernetes-1)
 В данной работе мы:
 * развернули kubernetes, опираясь на Kubernetes The Hard Way;
 * ознакомились с описанием основных примитивов нашего приложения и его дальнейшим запуском в Kubernetes.
