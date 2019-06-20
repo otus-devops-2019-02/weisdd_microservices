@@ -2251,3 +2251,51 @@ def find_post(id):
 ```python
 time.sleep(3)
 ```
+
+
+## HW#25 (kubernetes-1)
+В данной работе мы:
+* развернули kubernetes, опираясь на Kubernetes The Hard Way;
+* ознакомились с описанием основных примитивов нашего приложения и его дальнейшим запуском в Kubernetes.
+
+### Установка Kubernetes
+В целом, нет смысла дублировать описание процесса установки, поскольку я не отступал ни на шаг от https://github.com/kelseyhightower/kubernetes-the-hard-way
+Все файлы (в т.ч. сертификаты уже удалённого кластера) расположены в kubernetes/the_hard_way
+
+### Тестовый запуск нашего приложения
+Все yaml файлы размещены в kubernetes/reddit.
+```bash
+weisdd_microservices/kubernetes/reddit$ kubectl apply -f comment-deployment.yml 
+deployment.apps/comment-deployment created
+weisdd_microservices/kubernetes/reddit$ kubectl apply -f mongo-deployment.yml 
+deployment.apps/mongo-deployment created
+weisdd_microservices/kubernetes/reddit$ kubectl apply -f post-deployment.yml
+deployment.apps/post-deployment created
+weisdd_microservices/kubernetes/reddit$ kubectl apply -f ui-deployment.yml 
+deployment.apps/ui-deployment created
+```
+
+```bash
+weisdd_microservices/kubernetes/reddit$ kubectl get pods
+NAME                                  READY   STATUS    RESTARTS   AGE
+busybox-bd8fb7cbd-lkp8n               1/1     Running   0          10m
+comment-deployment-56bf895499-f9zl9   1/1     Running   0          2m21s
+mongo-deployment-67f58fb89-4nwd8      1/1     Running   0          2m13s
+nginx-dbddb74b8-clcqd                 1/1     Running   0          9m14s
+post-deployment-675449bbf7-h6r5t      1/1     Running   0          2m6s
+ui-deployment-846bd8c8b5-lqqqh        1/1     Running   0          2m1s
+untrusted                             1/1     Running   0          5m37s
+```
+
+Пробрасываем порт и пробуем подключиться к ui:
+```bash
+$ kubectl port-forward ui-deployment-846bd8c8b5-lqqqh 8080:9292
+$ curl -I http://127.0.0.1:8080
+HTTP/1.1 200 OK
+Content-Type: text/html;charset=utf-8
+X-XSS-Protection: 1; mode=block
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Set-Cookie: rack.session=BAh7CEkiD3Nlc3Npb25faWQGOgZFVEkiRWI4MGViOWRjNTRiMzc4YmU0NmU2%0AMTU4ZGZmZWRkN2YxNTRmNmY0MWI5MDRiYmM2NjA2OWIxMTMzNDk1ZGUxOWEG%0AOwBGSSIJY3NyZgY7AEZJIjF4Mkk0bHZoZDlJNElxazNoRWZ5Um5qVzZGZGJl%0AUUI4YnZBNnNIWE1oOHZvPQY7AEZJIg10cmFja2luZwY7AEZ7B0kiFEhUVFBf%0AVVNFUl9BR0VOVAY7AFRJIi02ODg1ZWIzZjc0M2UzZjI4YzJlNWQxYjlkMTUx%0AMWNlYzY1MDBmN2M3BjsARkkiGUhUVFBfQUNDRVBUX0xBTkdVQUdFBjsAVEki%0ALWRhMzlhM2VlNWU2YjRiMGQzMjU1YmZlZjk1NjAxODkwYWZkODA3MDkGOwBG%0A--59d0a97564f4049ff21508e11f1501a76ea468de; path=/; HttpOnly
+Content-Length: 1852
+```
