@@ -2299,3 +2299,635 @@ X-Frame-Options: SAMEORIGIN
 Set-Cookie: rack.session=BAh7CEkiD3Nlc3Npb25faWQGOgZFVEkiRWI4MGViOWRjNTRiMzc4YmU0NmU2%0AMTU4ZGZmZWRkN2YxNTRmNmY0MWI5MDRiYmM2NjA2OWIxMTMzNDk1ZGUxOWEG%0AOwBGSSIJY3NyZgY7AEZJIjF4Mkk0bHZoZDlJNElxazNoRWZ5Um5qVzZGZGJl%0AUUI4YnZBNnNIWE1oOHZvPQY7AEZJIg10cmFja2luZwY7AEZ7B0kiFEhUVFBf%0AVVNFUl9BR0VOVAY7AFRJIi02ODg1ZWIzZjc0M2UzZjI4YzJlNWQxYjlkMTUx%0AMWNlYzY1MDBmN2M3BjsARkkiGUhUVFBfQUNDRVBUX0xBTkdVQUdFBjsAVEki%0ALWRhMzlhM2VlNWU2YjRiMGQzMjU1YmZlZjk1NjAxODkwYWZkODA3MDkGOwBG%0A--59d0a97564f4049ff21508e11f1501a76ea468de; path=/; HttpOnly
 Content-Length: 1852
 ```
+
+
+## HW#26 (kubernetes-2)
+В данной работе мы:
+* развернули локальное окружение для работы с Kubernetes;
+* развернули Kubernetes в GKE;
+* запустили reddit в Kubernetes;
+* подготовили конфигурацию terraform для поднятия Kubernetes-кластера в GKE.
+
+### minikube
+Предварительно необходимо установить kubectl и Virtualbox.
+
+```bash
+$ minikube start
+```
+
+Манифесты с приложением:
+kubernetes/reddit/ui-deployment.yml
+```yaml
+---
+apiVersion: apps/v1beta2
+kind: Deployment
+metadata:
+  name: ui
+  labels:
+    app: reddit
+    component: ui
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: reddit
+      component: ui
+  template:
+    metadata:
+      name: ui-pod
+      labels:
+        app: reddit
+        component: ui
+    spec:
+      containers:
+        - image: weisdd/ui
+          name: ui
+          env:
+            - name: ENV
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+```
+
+kubernetes/reddit/post-deployment.yml
+```yaml
+---
+apiVersion: apps/v1beta2
+kind: Deployment
+metadata:
+  name: post
+  labels:
+    app: reddit
+    component: post
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: reddit
+      component: post
+  template:
+    metadata:
+      name: post
+      labels:
+        app: reddit
+        component: post
+    spec:
+      containers:
+      - image: weisdd/post
+        name: post
+        env:
+        - name: POST_DATABASE_HOST
+          value: post-db
+```
+
+kubernetes/reddit/comment-deployment.yml
+```yaml
+---
+apiVersion: apps/v1beta2
+kind: Deployment
+metadata:
+  name: comment
+  labels:
+    app: reddit
+    component: comment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: reddit
+      component: comment
+  template:
+    metadata:
+      name: comment
+      labels:
+        app: reddit
+        component: comment
+    spec:
+      containers:
+      - image: weisdd/comment
+        name: comment
+        env:
+        - name: COMMENT_DATABASE_HOST
+          value: comment-db
+```
+
+kubernetes/reddit/mongo-deployment.yml
+```yaml
+---
+apiVersion: apps/v1beta2
+kind: Deployment
+metadata:
+  name: mongo
+  labels:
+    app: reddit
+    component: mongo
+    comment-db: "true"
+    post-db: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: reddit
+      component: mongo
+  template:
+    metadata:
+      name: mongo
+      labels:
+        app: reddit
+        component: mongo
+        comment-db: "true"
+        post-db: "true"
+    spec:
+      containers:
+      - image: mongo:3.2
+        name: mongo
+        volumeMounts:
+        - name: mongo-persistent-storage
+          mountPath: /data/db
+      volumes:
+      - name: mongo-persistent-storage
+        emptyDir: {}
+```
+
+
+Запускаем приложение:
+```bash
+$ kubectl apply -f ./kubernetes/reddit
+```
+
+В Kubernetes взаимодействие с другими контейнерами и с внешним миром происходит через т.н. services (определяет набор POD'ов и способ доступа к ним). До того как они определены, извне мы можем обратиться к конкретному контейнеру через port-forwarding. К примеру, для ui:
+```bash
+$ kubectl get pods --selector component=ui
+$ kubectl port-forward <pod-name> 8080:9292
+```
+Соответственно, станет возможным зайти на веб-интерфейс по адресу http://localhost:8080
+
+
+kubernetes/reddit/ui-service.yml
+```yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui
+  labels:
+    app: reddit
+    component: ui
+spec:
+  type: NodePort
+  ports:
+    - nodePort: 32092
+      port: 9292
+      protocol: TCP
+      targetPort: 9292
+  selector:
+    app: reddit
+    component: ui
+```
+
+kubernetes/reddit/post-service.yml
+```yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: post
+  labels:
+    app: reddit
+    component: post
+spec:
+  ports:
+  - port: 5000
+    protocol: TCP
+    targetPort: 5000
+  selector:
+    app: reddit
+    component: post
+```
+
+kubernetes/reddit/comment-service.yml
+```yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: comment
+  labels:
+    app: reddit
+    component: comment
+spec:
+  ports:
+  - port: 9292
+    protocol: TCP
+    targetPort: 9292
+  selector:
+    app: reddit
+    component: comment
+```
+
+После применения конфигурации в coreDNS появятся записи вида <service>.<namespace>.svc.cluster.local (e.g. comment.default.svc.cluster.local).
+
+```bash
+$ kubectl exec -ti <pod-name> nslookup comment
+```
+
+C MongoDB ситуация осложняется тем, что в Kubernetes отсутствуют сетевые алиасы, соответственно, под каждое имя, используемое приложением (comment_db, post_db - передавались в ENV в соответствующих Dockerfile; в k8s в name нельзя использовать символ подчёркивания), необходимо создать отдельный сервис:
+
+kubernetes/reddit/comment-mongodb-service.yml
+```
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: comment-db
+  labels:
+    app: reddit
+    component: mongo
+    comment-db: "true"
+spec:
+  ports:
+  - port: 27017
+    protocol: TCP
+    targetPort: 27017
+  selector:
+    app: reddit
+    component: mongo
+    comment-db: "true"
+```
+
+kubernetes/reddit/post-mongodb-service.yml
+```yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: post-db
+  labels:
+    app: reddit
+    component: mongo
+    post-db: "true"
+spec:
+  ports:
+  - port: 27017
+    protocol: TCP
+    targetPort: 27017
+  selector:
+    app: reddit
+    component: mongo
+    post-db: "true"
+```
+
+Необходимые переменные окружения уже были описаны в deployment'ах. E.g.:
+```yaml
+env:
+- name: COMMENT_DATABASE_HOST
+  value: comment-db
+```
+
+Вернёмся к конфигурации ui-service:
+kubernetes/reddit/ui-service.yml
+```yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui
+  labels:
+    app: reddit
+    component: ui
+spec:
+  type: NodePort
+  ports:
+    - nodePort: 32092
+      port: 9292
+      protocol: TCP
+      targetPort: 9292
+  selector:
+    app: reddit
+    component: ui
+```
+По умолчанию, все сервисы имеют тип ClusterIP - располагаются во внутреннем диапазоне IP-адресов.
+Для публикации сервиса наружу стоит использовать т.н. NodePort. В нашем случае, сервис извне будет доступен на :32092.
+
+```bash
+weisdd_microservices/kubernetes/reddit$ minikube service list
+|-------------|------------|-----------------------------|
+|  NAMESPACE  |    NAME    |             URL             |
+|-------------|------------|-----------------------------|
+| default     | comment    | No node port                |
+| default     | comment-db | No node port                |
+| default     | kubernetes | No node port                |
+| default     | post       | No node port                |
+| default     | post-db    | No node port                |
+| default     | ui         | http://192.168.99.100:32092 |
+| kube-system | kube-dns   | No node port                |
+|-------------|------------|-----------------------------|
+```
+
+Активация dashboard в minikube:
+```bash
+weisdd_microservices/kubernetes/reddit$ minikube dashboard
+🔌  Enabling dashboard ...
+🤔  Verifying dashboard health ...
+🚀  Launching proxy ...
+🤔  Verifying proxy health ...
+🎉  Opening http://127.0.0.1:41989/api/v1/namespaces/kube-system/services/http:kubernetes-dashboard:/proxy/ in your default browser...
+```
+
+```bash
+ibeliako@dev:~/devops/git/weisdd_microservices/kubernetes/reddit$ kubectl get services -n kube-system
+NAME                   TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)                  AGE
+kube-dns               ClusterIP   10.96.0.10      <none>        53/UDP,53/TCP,9153/TCP   3h25m
+kubernetes-dashboard   ClusterIP   10.110.131.76   <none>        80/TCP                   72s
+
+ibeliako@dev:~/devops/git/weisdd_microservices/kubernetes/reddit$ minikube service list
+|-------------|----------------------|-----------------------------|
+|  NAMESPACE  |         NAME         |             URL             |
+|-------------|----------------------|-----------------------------|
+| default     | comment              | No node port                |
+| default     | comment-db           | No node port                |
+| default     | kubernetes           | No node port                |
+| default     | post                 | No node port                |
+| default     | post-db              | No node port                |
+| default     | ui                   | http://192.168.99.100:32092 |
+| kube-system | kube-dns             | No node port                |
+| kube-system | kubernetes-dashboard | No node port                |
+|-------------|----------------------|-----------------------------|
+```
+
+### Работа с namespace
+Мы можем запустить наше приложение в отдельном namespace. Для начала, создадим namespace dev:
+kubernetes/reddit/dev-namespace.yml
+```
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dev
+```
+
+```bash
+$ kubectl apply -f dev-namespace.yml
+$ kubectl apply -n dev -f .
+```
+
+Открываем веб-страницу:
+```bash
+$ minikube service ui -n dev
+```
+
+Note: вероятно из-за того, что minikube запускался в VirtualBox внутри VMware, постоянно происходили странные ошибки. К примеру, когда было по 3 реплики, docker для части контейнеров не мог подгрузить образы (ImagePullBackoff), даже в рамках одного компонента. После перезапуска начал крэшиться coreDNS:
+```bash
+$ kubectl get pods -n kube-system
+NAME                                   READY   STATUS             RESTARTS   AGE
+coredns-fb8b8dccf-55b6k                0/1     CrashLoopBackOff   1          17s
+coredns-fb8b8dccf-94lbj                0/1     CrashLoopBackOff   16         61m
+etcd-minikube                          1/1     Running            0          60m
+kube-addon-manager-minikube            1/1     Running            0          60m
+kube-apiserver-minikube                1/1     Running            0          60m
+kube-controller-manager-minikube       1/1     Running            1          60m
+kube-proxy-smhbc                       1/1     Running            0          61m
+kube-scheduler-minikube                1/1     Running            1          60m
+kubernetes-dashboard-d7c9687c7-5mlvh   0/1     CrashLoopBackOff   16         60m
+storage-provisioner                    1/1     Running            0          60m
+```
+Пришлось снизить количество реплик и несколько раз перезапустить minikube.
+
+### GKE
+Большого смысла описывать действия в веб-интерфейсе нет, поэтому сразу перейду к конфигурации terraform.
+Стоит только отметить, что в firewall мы открыли порты tcp:30000-32767 для all instances.
+
+### Задание со * (стр. 82)
+Задание:
+Разверните Kubenetes-кластер в GKE с помощью Terraform модуля (https://www.terraform.io/docs/providers/google/r/container_cluster.html)
+
+Решение:
+Здесь, собственно, ничего необычного:
+kubernetes/terraform/main.tf
+```hcl-terraform
+terraform {
+  required_version = ">=0.11,<0.12"
+}
+
+provider "google" {
+  version = "2.0.0"
+  project = "${var.project}"
+  region  = "${var.region}"
+}
+
+resource "google_container_cluster" "cluster" {
+  name               = "${var.cluster_name}"
+  zone               = "${var.zone}"
+  initial_node_count = "${var.initial_node_count}"
+
+  addons_config {
+    kubernetes_dashboard {
+      disabled = false
+    }
+  }
+}
+```
+
+kubernetes/terraform/variables.tf
+```hcl-terraform
+variable "project" {
+  description = "Project ID"
+}
+
+variable "region" {
+  description = "Region"
+  default     = "europe-west-1"
+}
+
+variable "cluster_name" {
+  default = "default-cluster-1"
+}
+
+variable "zone" {
+  description = "Zone"
+  default     = "europe-west1-b"
+}
+
+variable "initial_node_count" {
+  default = 2
+}
+
+variable "disk_size" {
+  default = 20
+}
+
+variable "machine_type" {
+  default = "small"
+}
+```
+
+kubernetes/terraform/terraform.tfvars
+```hcl-terraform
+project = "docker-1234"
+region = "europe-west-1"
+cluster_name = "default-cluster-1"
+zone = "europe-west1-b"
+initial_node_count = 3
+disk_size = 20
+machine_type = "small"
+```
+
+kubernetes/terraform/outputs.tf
+```hcl-terraform
+output "gcloud connect command" {
+  value = "gcloud container clusters get-credentials ${var.cluster_name} --zone ${var.zone} --project ${var.project}"
+}
+
+output "enable access to dashboard" {
+  value = "kubectl create clusterrolebinding kubernetes-dashboard --clusterrole=cluster-admin --serviceaccount=kube-system:kubernetes-dashboard"
+}
+```
+
+Задание:
+Создайте YAML-манифесты для описания созданных сущностей для включения dashboard.
+
+Решение:
+kubernetes/terraform/extra/role-binding.yml
+```yaml
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: kubernetes-dashboard
+  selfLink: /apis/rbac.authorization.k8s.io/v1beta1/clusterrolebindings/kubernetes-dashboard
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+- kind: ServiceAccount
+  name: kubernetes-dashboard
+  namespace: kube-system
+```
+
+Теперь конфигурация готова, можем сделать deploy:
+Поднимаем кластер:
+```bash
+kubernetes/terraform$ terraform init
+kubernetes/terraform$ terraform apply
+```
+
+Настраиваем kubectl:
+```bash
+$ gcloud container clusters get-credentials default-cluster-1 --zone europe-west1-b --project docker-1234
+```
+
+Деплоим приложение:
+```bash
+kubernetes/reddit$ kubectl apply -f .
+deployment.apps/comment created
+service/comment-db created
+service/comment created
+namespace/dev unchanged
+deployment.apps/mongo created
+service/mongodb created
+deployment.apps/post created
+service/post-db created
+service/post created
+deployment.apps/ui created
+service/ui created
+```
+
+Отыскиваем external-IP любой nod'ы:
+```bash
+kubernetes/reddit$ kubectl get nodes -o wide
+NAME                                               STATUS   ROLES    AGE     VERSION          INTERNAL-IP   EXTERNAL-IP     OS-IMAGE                             KERNEL-VERSION   CONTAINER-RUNTIME
+gke-default-cluster-1-default-pool-108b7cdc-9xdm   Ready    <none>   2m49s   v1.12.8-gke.10   10.132.0.22   35.195.41.120   Container-Optimized OS from Google   4.14.127+        docker://17.3.2
+gke-default-cluster-1-default-pool-108b7cdc-b2cf   Ready    <none>   2m47s   v1.12.8-gke.10   10.132.0.20   35.187.169.66   Container-Optimized OS from Google   4.14.127+        docker://17.3.2
+gke-default-cluster-1-default-pool-108b7cdc-ddl6   Ready    <none>   2m47s   v1.12.8-gke.10   10.132.0.21   104.199.86.87   Container-Optimized OS from Google   4.14.127+        docker://17.3.2
+```
+
+NodePort мы жестко задали в конфигурации (32092), поэтому искать его нет нужды, но при необходимости это всегда можно сделать через: kubectl get services -o wide.
+
+Проверяем, что все pods поднялись:
+```bash
+$ kubectl get pods -o wide
+NAME                       READY   STATUS    RESTARTS   AGE     IP         NODE                                               NOMINATED NODE
+comment-849fdc7ddd-c2r8r   1/1     Running   0          5m45s   10.4.2.5   gke-default-cluster-1-default-pool-108b7cdc-b2cf   <none>
+comment-849fdc7ddd-klfs7   1/1     Running   0          5m45s   10.4.1.4   gke-default-cluster-1-default-pool-108b7cdc-ddl6   <none>
+comment-849fdc7ddd-wpr86   1/1     Running   0          5m45s   10.4.2.6   gke-default-cluster-1-default-pool-108b7cdc-b2cf   <none>
+mongo-55f849fdbc-txctd     1/1     Running   0          5m42s   10.4.2.7   gke-default-cluster-1-default-pool-108b7cdc-b2cf   <none>
+post-86ddb7dc7d-bc4l8      1/1     Running   0          5m41s   10.4.2.8   gke-default-cluster-1-default-pool-108b7cdc-b2cf   <none>
+post-86ddb7dc7d-bjjz6      1/1     Running   0          5m41s   10.4.0.8   gke-default-cluster-1-default-pool-108b7cdc-9xdm   <none>
+post-86ddb7dc7d-rx56k      1/1     Running   0          5m41s   10.4.1.5   gke-default-cluster-1-default-pool-108b7cdc-ddl6   <none>
+ui-576c455f4-f79fm         1/1     Running   0          5m39s   10.4.0.9   gke-default-cluster-1-default-pool-108b7cdc-9xdm   <none>
+ui-576c455f4-l94gg         1/1     Running   0          5m39s   10.4.2.9   gke-default-cluster-1-default-pool-108b7cdc-b2cf   <none>
+ui-576c455f4-rwtzh         1/1     Running   0          5m39s   10.4.1.6   gke-default-cluster-1-default-pool-108b7cdc-ddl6   <none>
+```
+
+Теперь мы можем подключиться к приложению по любому из адресов: 35.195.41.120:32092, 35.187.169.66:32092, 104.199.86.87:32092. 
+
+Осталось получить доступ к dashboard:
+```bash
+kubernetes/terraform/extra$ kubectl apply -f role-binding.yaml 
+clusterrolebinding.rbac.authorization.k8s.io/kubernetes-dashboard created
+$ kubectl proxy
+Starting to serve on 127.0.0.1:8001
+```
+
+http://127.0.0.1:8001/api/v1/namespaces/kube-system/services/https:kubernetes-dashboard:/proxy/#!/overview?namespace=default
+
+### Дополнительные заметки
+В процессе выяснилось, что 2 worker nodes на машинах типа small недостаточно, чтобы поднять приложение:
+```bash
+$ kubectl get pods
+NAME                       READY   STATUS    RESTARTS   AGE
+comment-849fdc7ddd-4qdqn   1/1     Running   0          96s
+comment-849fdc7ddd-9mbzt   1/1     Running   0          96s
+comment-849fdc7ddd-kxnlf   1/1     Running   0          96s
+mongo-55f849fdbc-knvhp     1/1     Running   0          94s
+post-86ddb7dc7d-9fxnk      0/1     Pending   0          93s
+post-86ddb7dc7d-rn2h9      1/1     Running   0          93s
+post-86ddb7dc7d-vqkt7      1/1     Running   0          93s
+ui-576c455f4-68r7z         0/1     Pending   0          91s
+ui-576c455f4-94zmd         0/1     Pending   0          91s
+ui-576c455f4-f4rh7         0/1     Pending   0          91s
+
+$ kubectl describe pods ui-576c455f4-68r7z
+Name:               ui-576c455f4-68r7z
+Namespace:          default
+Priority:           0
+PriorityClassName:  <none>
+Node:               <none>
+Labels:             app=reddit
+                    component=ui
+                    pod-template-hash=576c455f4
+Annotations:        kubernetes.io/limit-ranger: LimitRanger plugin set: cpu request for container ui
+Status:             Pending
+IP:                 
+Controlled By:      ReplicaSet/ui-576c455f4
+Containers:
+  ui:
+    Image:      weisdd/ui
+    Port:       <none>
+    Host Port:  <none>
+    Requests:
+      cpu:  100m
+    Environment:
+      ENV:  default (v1:metadata.namespace)
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from default-token-qkvjv (ro)
+Conditions:
+  Type           Status
+  PodScheduled   False 
+Volumes:
+  default-token-qkvjv:
+    Type:        Secret (a volume populated by a Secret)
+    SecretName:  default-token-qkvjv
+    Optional:    false
+QoS Class:       Burstable
+Node-Selectors:  <none>
+Tolerations:     node.kubernetes.io/not-ready:NoExecute for 300s
+                 node.kubernetes.io/unreachable:NoExecute for 300s
+Events:
+  Type     Reason            Age                 From               Message
+  ----     ------            ----                ----               -------
+  Warning  FailedScheduling  39s (x5 over 3m6s)  default-scheduler  0/2 nodes are available: 2 Insufficient cpu.
+```
+
+После добавления ещё одной nod'ы всё поднялось.
