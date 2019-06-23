@@ -1,0 +1,7 @@
+project = "docker-1234"
+region = "europe-west-1"
+cluster_name = "default-cluster-1"
+zone = "europe-west1-b"
+initial_node_count = 3
+disk_size = 20
+machine_type = "small"
