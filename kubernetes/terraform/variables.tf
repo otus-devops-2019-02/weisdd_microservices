@@ -39,3 +39,7 @@ variable "disable_network_policy_addon" {
 variable "enable_network_policy" {
   default = "false"
 }
+
+variable "enable_legacy_abac" {
+  default = "false"
+}

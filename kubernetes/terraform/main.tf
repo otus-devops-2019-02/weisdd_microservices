@@ -31,4 +31,7 @@ resource "google_container_cluster" "cluster" {
   network_policy {
     enabled = "${var.enable_network_policy}"
   }
+
+  //for hw kubernetes-4
+  enable_legacy_abac = "${var.enable_legacy_abac}"
 }
