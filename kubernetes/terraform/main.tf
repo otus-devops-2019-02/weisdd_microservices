@@ -13,9 +13,22 @@ resource "google_container_cluster" "cluster" {
   zone               = "${var.zone}"
   initial_node_count = "${var.initial_node_count}"
 
+  node_config {
+    preemptible  = "${var.is_preemptible}"
+    machine_type = "${var.machine_type}"
+  }
+
   addons_config {
     kubernetes_dashboard {
       disabled = false
     }
+
+    network_policy_config {
+      disabled = false
+    }
+  }
+
+  network_policy {
+    enabled = true
   }
 }

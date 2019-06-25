@@ -2931,3 +2931,419 @@ Events:
 ```
 
 После добавления ещё одной nod'ы всё поднялось.
+
+
+## HW#27 (kubernetes-3)
+В данной работе мы рассмотрели:
+* Ingress Controller;
+* Ingress;
+* Secret;
+* TLS;
+* LoadBalancer Service;
+* Network Policies;
+* PersistentVolumes;
+* PersistentVolumeClaims.
++ создали Kubernetes-манифест для TLS-сертификатов (*)
+
+### Loadbalancer
+kubernetes/reddit/ui-service.yml
+```yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui
+  labels:
+    app: reddit
+    component: ui
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    nodePort: 32092
+    protocol: TCP
+    targetPort: 9292
+  selector:
+    app: reddit
+    component: ui
+```
+Недостатки:
+* нет поддержки правил HTTP URI;
+* используются только облачные балансировщики.
+
+### Ingress
+В конечном итоге мы хотим получить Ingress для сервиса UI с терминацией TLS:
+```bash
+$ kubectl get ingress -n dev
+NAME   HOSTS   ADDRESS        PORTS   AGE
+ui     *       34.98.108.33   80      13m
+
+$ openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout tls.key -out tls.crt -subj "/CN=34.98.108.33"
+
+$ kubectl create secret tls ui-ingress --key tls.key --cert tls.crt -n dev
+
+$ kubectl describe secret ui-ingress -n dev
+Name:         ui-ingress
+Namespace:    dev
+Labels:       <none>
+Annotations:  
+Type:         kubernetes.io/tls
+
+Data
+====
+tls.crt:  1107 bytes
+tls.key:  1704 bytes
+```
+
+kubernetes/reddit/ui-service.yml
+```yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui
+  labels:
+    app: reddit
+    component: ui
+spec:
+  type: NodePort
+  ports:
+  - port: 9292
+    protocol: TCP
+    targetPort: 9292
+  selector:
+    app: reddit
+    component: ui
+```
+
+kubernetes/reddit/ui-ingress.yml
+```yaml
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: ui
+  annotations:
+    kubernetes.io/ingress.allow-http: "false"
+spec:
+  tls:
+    - secretName: ui-ingress
+  rules:
+  - http:
+      paths:
+      - path: /*
+        backend:
+          serviceName: ui
+          servicePort: 9292
+```
+
+### Задание со * (стр. 46)
+Задание:
+Опишите создаваемый объект Secret в виде Kubernetes-манифеста
+
+Решение:
+kubernetes/reddit/secret.yml
+```yaml
+---
+apiVersion: v1
+data:
+  tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURCRENDQWV5Z0F3SUJBZ0lKQUxTcWp3TmFueVFaTUEwR0NTcUdTSWIzRFFFQkN3VUFNQmN4RlRBVEJnTlYKQkFNTURETTBMams0TGpFd09DNHpNekFlRncweE9UQTJNalF3T1RJME5EaGFGdzB5TURBMk1qTXdPVEkwTkRoYQpNQmN4RlRBVEJnTlZCQU1NRERNMExqazRMakV3T0M0ek16Q0NBU0l3RFFZSktvWklodmNOQVFFQkJRQURnZ0VQCkFEQ0NBUW9DZ2dFQkFMTTNldVFRSzJubm55ZWNTbWgycG1ob1NwOGFram1rbkVab2pud0tTWDVHZklZS1BkZTIKaXZybFVxd0dTQ3p5MVZaMXhaSlVGRGd1NUFTdU9CKzM2WFZ5alJVN1pOc3hwUnZQK3FyYUxQV1kwc2FuMzhtbAp3cmczYytXanprMWZLOXNlSE9DZHcyYzRhWmlBdXh2ZVNjMEQ4QlBhZHZHTjNUVXluVmFzSUV3aDFsUUx6MGYxCllZVDhHeHp5RnFxcXF6bFoxZytCUC85UjladVRyRTBHYzZWYkltOHNaVWROTlhLaG0rbXdRWTZwZkpMaERjNzcKZUFhQVk3RkVwVEQyNFJOMFptYkwwaHU2TlpjM2pxSU9jaXk0d0JrSW8rUXpKQTNRN0RVUGhOUk5NR1NObllDbApaRTI1QzYwSGtlRk1TSmVTeHJVMjJMSDdMd01FdXZTWWNaa0NBd0VBQWFOVE1GRXdIUVlEVlIwT0JCWUVGTmZBCnhFbFFJMCtOMFY0K1MxQXRObERiNnE2NU1COEdBMVVkSXdRWU1CYUFGTmZBeEVsUUkwK04wVjQrUzFBdE5sRGIKNnE2NU1BOEdBMVVkRXdFQi93UUZNQU1CQWY4d0RRWUpLb1pJaHZjTkFRRUxCUUFEZ2dFQkFIR0krb3J5Z0tGZAovMVJEUVh1UjJzYXIvWkdBdmpPUUFWbG5kWU5YRDhVaXhOOU5HYWxGQUR3UGIzd0RIUUkwOXZ5UnRVUkQ1NTNyCi9hd1ZDaFdBRmpGTndTMVRNOXhFb2ZNNFhoZ2sybDhLWlRUdWZmck5FQ1NkYm11eFF2SitscHR6czlkTTdxc2YKcFRKaEJXY2dzWG42SkQ3c01pY3pjNW1kUk0rd3AzVVdnYWs5UW5xODFscHhDVmhWNlZUREZkaUxQcXhUL3BvTQpSSDBycnZqWGVyRUNxTTNtak81ZDMxK24vTE9FbDVDL21VVlhGTU9hODhrZkNzeENUbUxLd0kxbndhM1NxdTZLCkh5Z1NPTlF3MTJpaVA5clVzcGsvSUxiRmt6d0FaZnZPN3RtRjVrRElIOUNDeDc5WVlpeElwWERoQTFpbnc2RUQKVUxicG1xTi8waGs9Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+  tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2Z0lCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktnd2dnU2tBZ0VBQW9JQkFRQ3pOM3JrRUN0cDU1OG4KbkVwb2RxWm9hRXFmR3BJNXBKeEdhSTU4Q2tsK1JueUdDajNYdG9yNjVWS3NCa2dzOHRWV2RjV1NWQlE0THVRRQpyamdmdCtsMWNvMFZPMlRiTWFVYnovcXEyaXoxbU5MR3A5L0pwY0s0TjNQbG84NU5YeXZiSGh6Z25jTm5PR21ZCmdMc2Iza25OQS9BVDJuYnhqZDAxTXAxV3JDQk1JZFpVQzg5SDlXR0UvQnNjOGhhcXFxczVXZFlQZ1QvL1VmV2IKazZ4TkJuT2xXeUp2TEdWSFRUVnlvWnZwc0VHT3FYeVM0UTNPKzNnR2dHT3hSS1V3OXVFVGRHWm15OUlidWpXWApONDZpRG5Jc3VNQVpDS1BrTXlRTjBPdzFENFRVVFRCa2paMkFwV1JOdVF1dEI1SGhURWlYa3NhMU50aXgreThECkJMcjBtSEdaQWdNQkFBRUNnZ0VCQUxGTFYzVzdVVmVKM25kUE5JVTNxOVJxS0RoU0R3cWJnRVpmTldZY3Z5di8KQ3oySGNEcXd5YmovbU5PNXV6bE1XaVVZaVlZRFM2VnhMZjQ3WkNac3lMWjV4bnlVcjJmeEt3ZmlybmJMTStNYgpkcGswaGoxMGtMZXhsQ1EvOHQyMEl5eTRFNVZhUFc4bDdjRUN5UmYreGovZGYyb0VtOXJIbjJqN1U0L2s1R2FyCkFwZ0hHTk9yZWRhb2F5UWtCVjJ4TWRObW4vTCtrOW1pTmtZU1p3anRwSHhIRGlKb1dPaTFRYjY5TGV4Z2p0LzkKencvMEUxcTlnS0JmTVcwaWZrUnNlYTQrSkFMcEorYjlod1BiSHFxcDg5d0VkS3FxaDNtQmNRSjVFY0xlOEwrUQphMFdlR0pqeU9SMm5WSllmbzFiWGFyY3pkbFFKSWpHRG1oR1lmSGZ6TVVrQ2dZRUE0SnJPQlpoSk5HN3BlN1lXCmVIb1R4dzZzOVhqamloQTU0ZDVxaUNBLzZXMlNWUW1hTTJzUlJLbGxrd1AwODBUenY0ekFLbXpOUUZkSTlnWXkKM2M3ZzhOUGRrNmZoSDh4eTZOOWJsdCtmYUdUQWk3cVZHTitDVE9WRXd2MXZWdVRSV1B5MjFyV01qRFRTYWxGcgpRbk5MbmFxQlRFejMvaEhSSm5yWjgxTG84QXNDZ1lFQXpFU0dDUEpneXR5V3UrQmhzbG9xVnZycmVPS2ZuRXlXClpEV0trajFERWtzQitjUEdDTEpNeUlUUmdCa0xpUXBGRnhGSVZrQmFtZ2NFWDk3b0FXNVkwWXFxNFg1T1dzY2EKYzd0MXRORVVsVFpZaitwZUJkMkdocHUvL1JxNE5qZXdyWFRFM1hZM1EzTm9YdVBqeWZtUW5odE1FWXN4T1FSYQoreXhXYVRaVmQyc0NnWUFDNHJwRzVCLzhwbmdsZUw5dEtOUmNPRm9NaFZNWEVRSk5YcGdyeTQ1R3AzdTd6L1hGCk4xanZjdVcxTDlYVDBrejNadzJJL2dEZEZNSUJOeThzSGw1UmVjZGRBRWtxS1d4SWhhWWRtQjNxTDNFeDJtSFUKQWZzZ2xjbCtYOWN3WEp3NzhuTSs2dkkxVXZCcElVYXBnZVcwenQzK1p2YkFzdVhuQXFrT01VQ0E1UUtCZ1FETQpCeFdxRWc3RUVaa3RoMjJONjZtbXYzSTdpSURNYVdNK0xJeUFqVmhWQ1Q2cjd2UDY4N3psL0dRVmd1NldydjliCmp4T2xzeG5NQjM1REZDN0FYeXV3QU1XMS9hYmQzVWw2bDU5MlAvQkRLY2xEMW1DYmt5MHZmcHBCZ1ZMR05OSHcKTDFZRHJuUjhsdVdGQWpNZ0pucGdzZnRFK3JicnNJSC9wOFdYeVlHTWlRS0JnRHhVZUtRSXJaS0p6TENZRHZXMQpKU3FmckJwOGxXTnlnaDdsYjVKNEc5alJYby91ejBHWHBma0YvTHJRdWxaMTYxb3Zlakx2ZnovRnUxbG5SUHc4CmY0ZzdSOVFnLzB3UExTaGIxLzlaaHBaUlFzL1V6a1BkQ2pXSlpoV0xsZ0h2L3FaQzQ0K3VwcGdVd2RvbVo2WTEKQXluUnJYVTZFZS94eGw2eDc5YzJOWHVaCi0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0K
+kind: Secret
+metadata:
+  name: ui-ingress
+  namespace: dev
+  selfLink: /api/v1/namespaces/dev/secrets/ui-ingress
+type: kubernetes.io/tls
+```
+
+После применения конфигурации в веб-интерфейсе GCP мы видим следующее:
+```
+k8s-um-dev-ui--502ac9c2c73eb555
+Frontend
+Protocol	IP:Port	Certificate	Network Tier 
+HTTPS	34.98.77.119:443	k8s-ssl-2d85053accdfb0f1-970a0856fd7c2de7--502ac9c2c73eb555	Premium
+```
+Теперь приложение доступно по адресу: https://34.98.77.119/
+
+
+### NetworkPolicy
+Вопреки тому, что описано на слайдах otus, на машинах типа g1-small NetworkPolicy не поддерживается (судя по всему, никто работоспособность не проверял):
+https://cloud.google.com/kubernetes-engine/docs/how-to/network-policy
+"Network policy is not supported for clusters whose nodes are f1-micro or g1-small instances, as the resource requirements are too high for instances of that size."
+"Note: If you enable or disable network policy for an existing cluster, GKE is required to re-create all of your cluster's node pools to ensure that the nodes are configured to run the network policy process."
+После изменения конфигурации в Terraform и пересоздания GKE-кластера с изначально включенной поддержкой NetworkPolicy, ограничения заработали.
+Note: Есть пара команд включающих поддержку NetworkPolicy для уже созданных кластеров ("gcloud beta container clusters update..."), но, как мне показалось, они не производят должного эффекта даже на правильном типе машин. Быть может, конечно, слишком мало ждал.
+
+kubernetes/terraform/main.tf:
+```hcl-terraform
+terraform {
+  required_version = ">=0.11,<0.12"
+}
+
+provider "google" {
+  version = "2.0.0"
+  project = "${var.project}"
+  region  = "${var.region}"
+}
+
+resource "google_container_cluster" "cluster" {
+  name               = "${var.cluster_name}"
+  zone               = "${var.zone}"
+  initial_node_count = "${var.initial_node_count}"
+
+  node_config {
+    preemptible  = "${var.is_preemptible}"
+    machine_type = "${var.machine_type}"
+  }
+
+  addons_config {
+    kubernetes_dashboard {
+      disabled = false
+    }
+
+    network_policy_config {
+      disabled = false
+    }
+  }
+
+  network_policy {
+    enabled = true
+  }
+}
+```
+
+kubernetes/terraform/variables.tf:
+```hcl-terraform
+variable "project" {
+  description = "Project ID"
+}
+
+variable "region" {
+  description = "Region"
+  default     = "europe-west-1"
+}
+
+variable "cluster_name" {
+  default = "default-cluster-1"
+}
+
+variable "zone" {
+  description = "Zone"
+  default     = "europe-west1-b"
+}
+
+variable "initial_node_count" {
+  default = 2
+}
+
+variable "disk_size" {
+  default = 20
+}
+
+variable "machine_type" {
+  default = "n1-standard-1"
+}
+
+variable "is_preemptible" {
+  default = "true"
+}
+```
+
+kubernetes/terraform/terraform.tfvars:
+```hcl-terraform
+project = "docker-1234"
+region = "europe-west-1"
+cluster_name = "default-cluster-1"
+zone = "europe-west1-b"
+initial_node_count = 3
+disk_size = 20
+machine_type = "n1-standard-1"
+is_preemptible = true
+```
+
+kubernetes/reddit/mongo-network-policy.yml
+```yaml
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-db-traffic
+  labels:
+    app: reddit
+spec:
+  podSelector:
+    matchLabels:
+      app: reddit
+      component: mongo
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          component: comment
+    - podSelector:
+        matchLabels:
+          component: post
+```
+- приведённая конфигурация учитывает задание "Обновите mongo-network-policy.yml так, чтобы post-сервис дошел до базы данных." (стр. 53)
+
+Пример логов при недоступности comment / post:
+```
+E, [2019-06-24T11:59:32.204277 #1] ERROR -- : service=ui | event=show_post | request_id=17cde18e-7f8a-4762-b698-6d1d685125da | message='Counldn't show the comments. Reason: 765: unexpected token at ''' | params: {"id":"5d10baa44549b1000edb5d2c"}
+```
+```
+E, [2019-06-24T11:18:02.689629 #1] ERROR -- : service=ui | event=show_all_posts | request_id=b1019a24-209f-4736-8355-c98e2bb0997c | message='Failed to read from Post service. Reason: Net::ReadTimeout' | params: "{}"
+```
+
+### Хранилище для базы
+#### gcePersistentDisk
+Создаём диск:
+```bash
+$ gcloud compute disks create --size=25GB --zone=europe-west1-b reddit-mongo-disk
+```
+Подключаем к машине:
+kubernetes/reddit/mongo-deployment.yml
+```yaml
+[...]
+    spec:
+      containers:
+      - image: mongo:3.2
+        name: mongo
+        volumeMounts:
+        - name: mongo-gce-pd-storage
+          mountPath: /data/db
+      volumes:
+      - name: mongo-gce-pd-storage
+        gcePersistentDisk:
+          pdName: reddit-mongo-disk
+          fsType: ext4
+```
+
+#### PersistentVolume & PersistentVolumeClaim
+Данная схема позволяет выделять ресурс не целиком (весь диск), а лишь его часть, в соответствии с запросом.
+Здесь мы используем тот же самый диск из п.1.
+
+Добавляем PersistentVolume в кластер:
+kuberentes/reddit/mongo-volume.yml
+```yaml
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: reddit-mongo-disk
+spec:
+  capacity:
+    storage: 25Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  gcePersistentDisk:
+    fsType: "ext4" 
+    pdName: "reddit-mongo-disk"
+```
+```bash
+$ kubectl apply -f mongo-volume.yml -n dev
+```
+
+Далее описываем PersistentVolumeClaim (PVC):
+
+kuberentes/reddit/mongo-claim.yml
+```yaml
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: mongo-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 15Gi
+```
+```bash
+$ kubectl apply -f mongo-claim.yml -n dev
+```
+ВАЖНО: в единый момент времени, один PV может использоваться только для одного Claim'а. Если PV с заданными параметрами не будет найдет, то Claim его создаст, воспользовавшись стандартным StorageClass ($ kubectl describe storageclass standard -n dev)
+
+kuberentes/reddit/mongo-deployment.yml
+```yaml
+[...]
+    spec:
+      containers:
+      - image: mongo:3.2
+        name: mongo
+        volumeMounts:
+        - name: mongo-gce-pd-storage
+          mountPath: /data/db
+      volumes:
+      - name: mongo-gce-pd-storage
+        persistentVolumeClaim:
+          claimName: mongo-pvc
+```
+
+#### Динамическое выделение Volume
+StorageClass позволяет описывать, где и какое хранилище будет создаваться.
+Пример для SSD:
+
+kubernetes/reddit/storage-fast.yml
+```yaml
+---
+kind: StorageClass
+apiVersion: storage.k8s.io/v1beta1
+metadata:
+  name: fast
+provisioner: kubernetes.io/gce-pd
+parameters:
+  type: pd-ssd
+```
+```bash
+$ kubectl apply -f storage-fast.yml -n dev
+```
+
+kuberentes/reddit/mongo-claim-dynamic.yml
+```yaml
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: mongo-pvc-dynamic
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast
+  resources:
+    requests:
+      storage: 10Gi
+```
+
+```bash
+$ kubectl apply -f mongo-claim-dynamic.yml -n dev
+```
+
+Вносим соответствующие изменения в deployment:
+kuberentes/reddit/mongo-deployment.yml
+```yaml
+    spec:
+      containers:
+      - image: mongo:3.2
+        name: mongo
+        volumeMounts:
+        - name: mongo-gce-pd-storage
+          mountPath: /data/db
+      volumes:
+      - name: mongo-gce-pd-storage
+        persistentVolumeClaim:
+          claimName: mongo-pvc-dynamic
+```
+
+Статус PV можно проверить следующим образом:
+```bash
+$ kubectl get persistentvolume -n dev
+NAME                                       CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS      CLAIM                   STORAGECLASS   REASON   AGE
+pvc-c01885d8-9683-11e9-9cd4-42010a84020f   15Gi       RWO            Delete           Bound       dev/mongo-pvc           standard                9m20s
+pvc-f20ff404-9684-11e9-9cd4-42010a84020f   10Gi       RWO            Delete           Bound       dev/mongo-pvc-dynamic   fast                    47s
+reddit-mongo-disk                          25Gi       RWO            Retain           Available                                                   18m
+```

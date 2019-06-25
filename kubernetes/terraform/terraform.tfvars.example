@@ -5,3 +5,5 @@ zone = "europe-west1-b"
 initial_node_count = 3
 disk_size = 20
 machine_type = "small"
+machine_type = "n1-standard-1"
+is_preemptible = true

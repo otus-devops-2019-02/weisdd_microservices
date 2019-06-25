@@ -25,5 +25,9 @@ variable "disk_size" {
 }
 
 variable "machine_type" {
-  default = "small"
+  default = "n1-standard-1"
+}
+
+variable "is_preemptible" {
+  default = "true"
 }
