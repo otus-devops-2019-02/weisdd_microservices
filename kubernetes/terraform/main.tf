@@ -24,11 +24,11 @@ resource "google_container_cluster" "cluster" {
     }
 
     network_policy_config {
-      disabled = false
+      disabled = "${var.disable_network_policy_addon}"
     }
   }
 
   network_policy {
-    enabled = true
+    enabled = "${var.enable_network_policy}"
   }
 }

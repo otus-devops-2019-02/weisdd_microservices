@@ -3069,10 +3069,16 @@ HTTPS	34.98.77.119:443	k8s-ssl-2d85053accdfb0f1-970a0856fd7c2de7--502ac9c2c73eb5
 
 ### NetworkPolicy
 Вопреки тому, что описано на слайдах otus, на машинах типа g1-small NetworkPolicy не поддерживается (судя по всему, никто работоспособность не проверял):
+
 https://cloud.google.com/kubernetes-engine/docs/how-to/network-policy
-"Network policy is not supported for clusters whose nodes are f1-micro or g1-small instances, as the resource requirements are too high for instances of that size."
-"Note: If you enable or disable network policy for an existing cluster, GKE is required to re-create all of your cluster's node pools to ensure that the nodes are configured to run the network policy process."
+```
+Network policy is not supported for clusters whose nodes are f1-micro or g1-small instances, as the resource requirements are too high for instances of that size.
+
+Note: If you enable or disable network policy for an existing cluster, GKE is required to re-create all of your cluster's node pools to ensure that the nodes are configured to run the network policy process.
+```
+
 После изменения конфигурации в Terraform и пересоздания GKE-кластера с изначально включенной поддержкой NetworkPolicy, ограничения заработали.
+
 Note: Есть пара команд включающих поддержку NetworkPolicy для уже созданных кластеров ("gcloud beta container clusters update..."), но, как мне показалось, они не производят должного эффекта даже на правильном типе машин. Быть может, конечно, слишком мало ждал.
 
 kubernetes/terraform/main.tf:
