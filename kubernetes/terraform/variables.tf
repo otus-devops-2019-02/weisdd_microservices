@@ -31,3 +31,15 @@ variable "machine_type" {
 variable "is_preemptible" {
   default = "true"
 }
+
+variable "disable_network_policy_addon" {
+  default = "true"
+}
+
+variable "enable_network_policy" {
+  default = "false"
+}
+
+variable "enable_legacy_abac" {
+  default = "false"
+}
