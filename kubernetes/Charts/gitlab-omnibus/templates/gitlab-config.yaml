@@ -17,8 +17,6 @@ data:
   mattermost_app_uid: {{ .Values.mattermostAppUID }}
   postgres_user: gitlab
   postgres_db: gitlab_production
-  pages_external_scheme: {{ .Values.pagesExternalScheme }}
-  pages_external_domain: {{ .Values.pagesExternalDomain }}
 ---
 apiVersion: v1
 kind: Secret

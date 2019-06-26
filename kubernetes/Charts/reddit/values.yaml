@@ -5,7 +5,7 @@ comment:
     externalPort: 9292
 
   image:
-    repository: weisdd/post
+    repository: weisdd/comment
     tag: latest
 
 post:
