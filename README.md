@@ -3353,3 +3353,250 @@ pvc-c01885d8-9683-11e9-9cd4-42010a84020f   15Gi       RWO            Delete     
 pvc-f20ff404-9684-11e9-9cd4-42010a84020f   10Gi       RWO            Delete           Bound       dev/mongo-pvc-dynamic   fast                    47s
 reddit-mongo-disk                          25Gi       RWO            Retain           Available                                                   18m
 ```
+
+
+## HW-28 (kubernetes-4)
+В данной работе мы:
+* познакомились с Helm;
+* развернули Gitlab CI Omnibus в Kubernetes;
+* настроили Pipeline для автоматического разворачивания приложения в Kubernetes.
+
+### Helm
+#### Tiller
+Подготавливаем Tiller (серверная часть Helm, разворачивается в kubernetes)
+kubernetes/tiller.yml
+```yaml
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tiller
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: tiller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: tiller
+    namespace: kube-system
+```
+```bash
+$ kubectl apply -f tiller.yml
+$ helm init --service-account tiller
+```
+
+#### Charts
+В kubernetes/Charts подготовлены шаблоны как для поднятия отдельных компонентов приложения (comment, ui, post), так и приложения целиком (reddit).
+Шаблоны параметризированы, значения переменных хранятся в соответствующих values.yaml. При этом, reddit/values.yaml позволяет переопределять значения, заданные в конкретных компонентах.
+Helper'ы хранятся в Charts/<component>/templates/_helpers.tpl
+
+Подготовка пакета:
+```bash
+kubernetes/Charts$ helm dep update ./reddit
+```
+
+Выкатывание релиза (как для отдельного компонента, так и для всего приложения):
+```bash
+kubernetes/Charts$ helm install --name <release-name> <path>
+kubernetes/Charts$ helm install --name test-ui-1 ui/
+```
+
+Обновление релиза после внесения изменений:
+```bash
+kubernetes/Charts$ helm upgrade <release-name> <path>
+```
+
+Полное удаление релиза:
+```bash
+$ helm del --purge <release-name>
+```
+
+#### mongodb
+В helm есть некий репозиторий с заранее подготовленными Charts. Пример поиска:
+```bash
+$ helm search mongo
+NAME                                CHART VERSION APP VERSION DESCRIPTION                                                 
+stable/mongodb                      5.20.0        4.0.10      NoSQL document-oriented database that stores JSON-like do...
+[...]
+```
+Соответственно, в kubernetes/Charts/reddit/requirements.yaml мы можем сослаться на найденное в репозитории.
+
+Важно:
+Учитывая, что на слайдах была отсылка к старому релизу Chart (0.4.18), я решил поставить версию посвежее - 5.20.0:
+```yaml
+---
+dependencies:
+  [...]
+  - name: mongodb
+    version: 5.20.0
+    repository: https://kubernetes-charts.storage.googleapis.com
+```
+Увы в данной версии, похоже, есть какие-то отличия в плане авторизации, поэтому post начал падать с ошибкой:
+```
+"/usr/local/lib/python3.6/site-packages/pymongo/helpers.py\", line 210, in _check_command_response\n    raise OperationFailure(msg % errmsg, code, response)\npymongo.errors.OperationFailure: command find requires authentication\n"}
+```
+
+Пришлось вернуть на:
+```yaml
+---
+dependencies:
+  [...]
+  - name: mongodb
+    version: 0.4.18
+    repository: https://kubernetes-charts.storage.googleapis.com
+```
+
+#### Service Ports
+Поскольку имена сервисов у нас теперь с префиксами, включающими namespace, необходимо переопределить переменные окружения в ui:
+/kubernetes/Charts/ui/templates/deployment.yaml
+```yaml
+        env:
+        - name: POST_SERVICE_HOST
+          value: {{  .Values.postHost | default (printf "%s-post" .Release.Name) }}
+        - name: POST_SERVICE_PORT
+          value: {{  .Values.postPort | default "5000" | quote }}
+        - name: COMMENT_SERVICE_HOST
+          value: {{  .Values.commentHost | default (printf "%s-comment" .Release.Name) }}
+        - name: COMMENT_SERVICE_PORT
+          value: {{  .Values.commentPort | default "9292" | quote }}
+```
+
+### Gitlab CI Omnibus
+#### Подготовка кластера
+Для Gitlab CI потребовалось сменить тип машин на более мощный (-> n1-standard-2) и активировать устаревшие права доступа (enable_legacy_abac). Попутно через дополнительные переменные отключил network policy за ненадобностью (disable_network_policy_addon, enable_network_policy), размер кластера сократил до двух (в процессе работы один из кластеров падал, pod автоматически пересоздался - всё отлично отработало).
+Всё это отражено в конфигурации terraform: kubernetes/terraform/.
+
+#### Установка
+```bash
+kubernetes/Charts/$ helm repo add gitlab https://charts.gitlab.io
+$ helm fetch gitlab/gitlab-omnibus --version 0.1.37 --untar
+$ cd gitlab-omnibus
+```
+
+Далее подменяем файлы (см. репозиторий):
+* gitlab-omnibus/values.yaml
+* gitlab-omnibus/templates/gitlab/gitlab-
+svc.yaml
+* gitlab-omnibus/templates/gitlab-
+config.yaml
+* gitlab-omnibus/templates/ingress/gitlab-ingress.yaml
+
+Делаем пробный деплой:
+```bash
+kubernetes/Charts/gitlab-omnibus$ helm install --name gitlab . -f values.yaml
+```
+И тут же упираемся в ошибку:
+```bash
+$ kubectl get pods
+NAME                                        READY   STATUS    RESTARTS   AGE
+gitlab-gitlab-65fc944597-57rzr              0/1     Pending   0          9m6s
+gitlab-gitlab-postgresql-784bcc4487-jcvm7   1/1     Running   0          9m6s
+gitlab-gitlab-redis-55b589c99c-jl6dj        1/1     Running   0          9m6s
+gitlab-gitlab-runner-5f8575bb9c-w9p54       1/1     Running   6          9m6s
+
+$ kubectl describe pods gitlab-gitlab-65fc944597-57rzr
+Name:               gitlab-gitlab-65fc944597-57rzr
+Namespace:          default
+Priority:           0
+PriorityClassName:  <none>
+[...]
+Events:
+  Type     Reason            Age                  From               Message
+  ----     ------            ----                 ----               -------
+  Warning  FailedScheduling  5s (x26 over 9m21s)  default-scheduler  pod has unbound immediate PersistentVolumeClaims (repeated 2 times)
+
+$ kubectl describe pvc
+[...]
+Name:          gitlab-gitlab-registry-storage
+Namespace:     default
+StorageClass:  gitlab-gitlab-fast
+Status:        Pending
+Volume:        
+Labels:        app=gitlab-gitlab
+               chart=gitlab-omnibus-0.1.37
+               heritage=Tiller
+               release=gitlab
+Annotations:   volume.beta.kubernetes.io/storage-class: gitlab-gitlab-fast
+               volume.beta.kubernetes.io/storage-provisioner: kubernetes.io/gce-pd
+Finalizers:    [kubernetes.io/pvc-protection]
+Capacity:      
+Access Modes:  
+Events:
+  Type       Reason              Age                 From                         Message
+  ----       ------              ----                ----                         -------
+  Warning    ProvisioningFailed  88s (x16 over 20m)  persistentvolume-controller  Failed to provision volume with StorageClass "gitlab-gitlab-fast": googleapi: Error 403: QUOTA_EXCEEDED - Quota 'SSD_TOTAL_GB' exceeded.  Limit: 100.0 in region europe-west1.
+Mounted By:  gitlab-gitlab-65fc944597-57rzr
+```
+Поскольку Gitlab CI Omnibus в GKE по умолчанию использует SSD, можете мы упёрлись в лимит в 100 Гб для одного из POD'ов. В процессе исследования вопроса обнаружил, что после задания kubernetes-3 у нас остался ненужный SSD диск. После его удаления всё ок. В качестве альтернативы можно было в конфигурации Gitlab CI явно задать storage class, соответствующий обычным дискам.
+
+Отыскиваем IP-адрес ingress'а:
+```bash
+$ kubectl get service -n nginx-ingress nginx
+NAME    TYPE           CLUSTER-IP    EXTERNAL-IP     PORT(S)                                   AGE
+nginx   LoadBalancer   10.7.252.35   34.77.124.149   80:32616/TCP,443:30608/TCP,22:31145/TCP   2m57s
+```
+Прописываем его в /etc/hosts:
+```
+34.77.124.149 gitlab-gitlab staging production
+```
+
+Теперь проект у нас есть доступ к http://gitlab-gitlab/.
+
+#### Настройка
+Создаём группу weisdd, в Settings->CI/CD определяем две переменные, которые будут использоваться в нашем pipeline: CI_REGISTRY_USER, CI_REGISTRY_PASSWORD - они соответствуют реквизитам доступа к Docker Hub.
+
+ВАЖНО: переменная CI_REGISTRY_PASSWORD не должна иметь статус protected, иначе стадия build будет вываливаться с ошибкой на этапе аутентификации ($ docker login ...)
+
+Далее в группе создаём проекты comment, post, ui, reddit-deploy, закидываем в них соответсвующие файлы из src/ (для comment, post, ui) и kubernetes/Charts (для reddit-deploy).
+
+Пример:
+```bash
+$ git init
+$ git remote add origin http://gitlab-gitlab/weisdd/ui.git
+$ git add .
+$ git commit -m “init”
+$ git push origin master
+```
+
+Итоговые пайплайны:
+* reddit-deploy: kubernetes/Charts/.gitlab-ci.yml
+* comment: src/comment/.gitlab-ci.yml
+* post: src/post/.gitlab-ci.yml
+* ui: src/ui/.gitlab-ci.yml
+
+ВАЖНО: пример пайплайна из презентации вываливался с ошибкой:
+```
+$HELM_HOME has been configured at /root/.helm.
+Error: error when upgrading: current Tiller version is newer, use --force-upgrade to downgrade
+ERROR: Job failed: error executing remote command: command terminated with non-zero exit code: Error executing in Docker Container: 1
+```
+Поэтому в function install_tiller() в строке "helm init --upgrade" убирал ключ "--upgrade".
+
+Теперь у нас по коммиту в feature-ветки автоматически выкатывается окружение для review, удалять его необходимо вручную.
+В master-ветке пайплайн отличается:
+* docker-образы не собираются;
+* деплой идёт на статичные окружения (staging, production);
+* окружения не удаляются (в т.ч. staging).
+
+Для каждой ветки в /etc/hosts должна быть отдельная запись:
+```
+34.77.124.149 gitlab-gitlab staging production
+34.77.124.149 weisdd-ui-feature-3
+34.77.124.149 weisdd-comment-feature-4
+34.77.124.149 weisdd-post-feature-3
+```
+
+```bash
+$ helm ls
+NAME                      REVISION  UPDATED                   STATUS    CHART                 APP VERSION NAMESPACE 
+gitlab                    1         Wed Jun 26 01:34:49 2019  DEPLOYED  gitlab-omnibus-0.1.37             default   
+production                1         Wed Jun 26 03:28:48 2019  DEPLOYED  reddit-0.1.0                      production
+review-weisdd-com-79uloj  1         Wed Jun 26 03:16:05 2019  DEPLOYED  reddit-0.1.0                      review    
+staging                   1         Wed Jun 26 03:26:39 2019  DEPLOYED  reddit-0.1.0                      staging 
+```
