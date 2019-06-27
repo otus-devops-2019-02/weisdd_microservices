@@ -3604,9 +3604,10 @@ staging                   1         Wed Jun 26 03:26:39 2019  DEPLOYED  reddit-0
 
 ## HW#29 (kubernetes-5)
 В данной работе мы:
-* развертыванули Prometheus в k8s;
+* развернули Prometheus в k8s;
 * настроили Prometheus и Grafana для сбора метрик;
-* настроили EFK для сбора логов.
+* настроили EFK для сбора логов;
+* подготовили helm chart для разворачивания EFK (*).
 
 ### Подготовка
 Для кластера теперь используем:
@@ -3779,6 +3780,7 @@ helm upgrade --install grafana stable/grafana --set "adminPassword=admin" --set 
 * UI Service Monitoring.
 
 Изначально графики Business_Logic_Monitoring и UI Service Monitoring не поддерживали разделение на окружения, эта поддержка была добавлена в рамках д/з при помощи т.н. механизма Templating, обновленные файлы положил в monitoring/grafana-k8s/dashboards.
+
 ВАЖНО: на слайде на стр. 44 была ошибка - у нас нет метки namespace, для templating использовать kubernetes_namespace. e.g.
 ```
 rate(ui_request_count{kubernetes_namespace=~"$namespace"}[1m])
