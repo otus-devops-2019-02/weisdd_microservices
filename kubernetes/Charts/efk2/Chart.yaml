@@ -1,0 +1,8 @@
+---
+name: EFK
+version: 1.0.0
+description: EFK for HW#25
+maintainers:
+  - name: Igor Beliakov
+    email: user@example.com
+appVersion: 1.0

@@ -1,0 +1,8 @@
+---
+name: fluentd
+version: 1.0.0
+description: fluentd as a part of EFK
+maintainers:
+  - name: Igor Beliakov
+    email: user@example.com
+appVersion: 1.0

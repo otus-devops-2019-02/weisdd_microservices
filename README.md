@@ -3600,3 +3600,263 @@ production                1         Wed Jun 26 03:28:48 2019  DEPLOYED  reddit-0
 review-weisdd-com-79uloj  1         Wed Jun 26 03:16:05 2019  DEPLOYED  reddit-0.1.0                      review    
 staging                   1         Wed Jun 26 03:26:39 2019  DEPLOYED  reddit-0.1.0                      staging 
 ```
+
+
+## HW#29 (kubernetes-5)
+В данной работе мы:
+* развертыванули Prometheus в k8s;
+* настроили Prometheus и Grafana для сбора метрик;
+* настроили EFK для сбора логов.
+
+### Подготовка
+Для кластера теперь используем:
+* 2 x g1-small;
+* 1 x n1-standard-2.
+
+Дополнительные параметры:
+* Stackdriver Logging - Отключен (tf: logging_service = "none")
+* Stackdriver Monitoring - Отключен (tf: monitoring_service = "none")
+* Устаревшие права доступа - Включено (tf: enable_legacy_abac = true)
+
+Конфигурация kubernetes/terraform адаптирована под поддержку кластера из разных нод, а также на использование указанных выше параметров.
+
+```bash
+kubernetes/terraform$ terraform apply
+kubernetes/terraform$ gcloud container clusters get-credentials default-cluster-1 --zone europe-west1-b --project docker-1234
+
+kubernetes$ kubectl apply -f tiller.yml 
+kubernetes$ helm init --service-account tiller
+```
+
+Устанавливаем ingress-контроллер nginx:
+```bash
+$ helm install stable/nginx-ingress --name nginx
+[...]
+$ kubectl get services
+NAME                                  TYPE           CLUSTER-IP     EXTERNAL-IP    PORT(S)                      AGE
+kubernetes                            ClusterIP      10.7.240.1     <none>         443/TCP                      13m
+nginx-nginx-ingress-controller        LoadBalancer   10.7.252.12    34.76.156.20   80:31484/TCP,443:31490/TCP   51s
+nginx-nginx-ingress-default-backend   ClusterIP      10.7.240.172   <none>         80/TCP                       51s
+```
+Добавляем запись в /etc/hosts:
+```bash
+$ tail -n 2 /etc/hosts
+34.76.156.20 reddit reddit-prometheus reddit-grafana reddit-non-prod production reddit-kibana staging prod
+```
+
+Запускаем приложение в нескольких экземплярах:
+```
+kubernetes/Charts$ helm upgrade reddit-test ./reddit --install
+kubernetes/Charts$ helm upgrade production --namespace production ./reddit --install
+kubernetes/Charts$ helm upgrade staging --namespace staging ./reddit --install
+```
+
+### Prometheus
+Устанавливаем Prometheus:
+```bash
+kubernetes/Charts$ helm fetch --untar stable/prometheus
+```
+
+Добавляем файл с конфигурацией custom_values.yaml (https://gist.githubusercontent.com/chromko/2bd290f7becdf707cde836ba1ea6ec5c/raw/c17372866867607cf4a0445eb519f9c2c377a0ba/gistfile1.txt), активируем в ней kubeStateMetrics и nodeExporter:
+```yaml
+kubeStateMetrics:
+  enabled: true
+
+nodeExporter:
+  enabled: true 
+```
+Запускаем Prometheus:
+```bash
+Charts/prometheus$ helm upgrade prom . -f custom_values.yaml --install
+Release "prom" does not exist. Installing it now.
+```
+
+Конфигурация меток для каждого из компонентов приложения
+```yaml
+      - job_name: 'ui-endpoints'
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+          - source_labels: [__meta_kubernetes_service_label_app]
+            action: keep
+            regex: ui
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            target_label: kubernetes_name
+
+      - job_name: 'comment-endpoints'
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+          - source_labels: [__meta_kubernetes_service_label_app]
+            action: keep
+            regex: comment
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            target_label: kubernetes_name
+
+      - job_name: 'post-endpoints'
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+          - source_labels: [__meta_kubernetes_service_label_app]
+            action: keep
+            regex: post
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            target_label: kubernetes_name
+```
+
+Поддержка разделения target'ов по окружениям:
+```
+      - job_name: 'reddit-production'
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+          - source_labels: [__meta_kubernetes_service_label_app, __meta_kubernetes_namespace]
+            action: keep
+            regex: reddit;(production|staging)+
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            target_label: kubernetes_name
+```
+ВАЖНО: конфигурация, предложенная на слайдах, не учитывает существование namespace отличных от production и staging, поэтому остальные target'ы выпадают. В качестве эксперимента решил добавить отображение остальных окружений в отдельной группе reddit-test:
+```yaml
+      - job_name: 'reddit-test'
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_service_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: drop
+            regex: (production|staging)+
+          - source_labels: [__meta_kubernetes_service_label_app, __meta_kubernetes_namespace]
+            action: keep
+            regex: reddit;.+
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            target_label: kubernetes_name
+```
+- Не разобрался как сделать негативное совпадение (стандартный для этих целей синтаксис regex не сработал), поэтому пришлось попросту отбросить метки production и staging из __meta_kubernetes_namespace.
+Пример отображения:
+```
+reddit-test (6/6 up)
+Endpoint 	State 	Labels 	Last Scrape 	Error
+http://10.4.3.11:9292/metrics
+	up 	app="reddit" component="comment" instance="10.4.3.11:9292" kubernetes_name="reddit-test-comment" kubernetes_namespace="default" release="reddit-test" 	11.408s ago 	
+http://10.4.3.12:5000/metrics
+	up 	app="reddit" component="post" instance="10.4.3.12:5000" kubernetes_name="reddit-test-post" kubernetes_namespace="default" release="reddit-test" 	40.539s ago 	
+http://10.4.3.13:9292/metrics
+	up 	app="reddit" component="ui" instance="10.4.3.13:9292" kubernetes_name="reddit-test-ui" kubernetes_namespace="default" release="reddit-test" 	14.671s ago 	
+http://10.4.3.18:9292/metrics
+	up 	app="reddit" component="ui" instance="10.4.3.18:9292" kubernetes_name="test2-ui" kubernetes_namespace="test2" release="test2" 	11.346s ago 	
+http://10.4.3.19:5000/metrics
+	up 	app="reddit" component="post" instance="10.4.3.19:5000" kubernetes_name="test2-post" kubernetes_namespace="test2" release="test2" 	19.908s ago 	
+http://10.4.3.20:9292/metrics
+	up 	app="reddit" component="comment" instance="10.4.3.20:9292" kubernetes_name="test2-comment" kubernetes_namespace="test2" release="test2" 	4.169s ago 	
+```
+
+### Grafana
+helm upgrade --install grafana stable/grafana --set "adminPassword=admin" --set "service.type=NodePort" --set "ingress.enabled=true" --set "ingress.hosts={reddit-grafana}"
+
+Импортировал 3 дэшборда из предыдущего дз:
+* Docker and system monitoring;
+* Business_Logic_Monitoring;
+* UI Service Monitoring.
+
+Изначально графики Business_Logic_Monitoring и UI Service Monitoring не поддерживали разделение на окружения, эта поддержка была добавлена в рамках д/з при помощи т.н. механизма Templating, обновленные файлы положил в monitoring/grafana-k8s/dashboards.
+ВАЖНО: на слайде на стр. 44 была ошибка - у нас нет метки namespace, для templating использовать kubernetes_namespace. e.g.
+```
+rate(ui_request_count{kubernetes_namespace=~"$namespace"}[1m])
+```
+
+### ELK
+Т.к. в нашей конфигурации ElasticSearch жестко задано, на ноду с какой меткой должна происходить установка elastic, поэтому её необходимо проставить на ноде с n1-standard-2:
+```
+$ kubectl label node gke-default-cluster-1-node-pool-2-7607162c-pg28 elastichost=true
+node/gke-default-cluster-1-node-pool-2-7607162c-pg28 labeled
+```
+
+Заранее подготовленную конфигурацию помещаем в kubernetes/efk/, запускаем ELK:
+```bash
+kubernetes/Charts$ kubectl apply -f ./efk
+persistentvolumeclaim/elasticsearch-logging-claim created
+service/elasticsearch-logging created
+statefulset.apps/elasticsearch-logging created
+service/elasticsearch-logging unchanged
+daemonset.apps/fluentd-es-v2.0.2 created
+
+$ helm upgrade --install kibana stable/kibana --set "ingress.enabled=true" --set "ingress.hosts={reddit-kibana}" --set "env.ELASTICSEARCH_URL=http://elasticsearch-logging:9200" --version 0.1.1
+```
+
+### Задание со * (стр. 59)
+Задание:
+Создайте Helm-чарт для установки стека EFK и поместите в директорию charts
+
+Решение:
+kubernetes/Charts/efk2:
+
+```bash
+kubernetes/Charts$ tree efk2
+efk2
+├── charts
+│   ├── elasticsearch-1.0.0.tgz
+│   ├── fluentd-1.0.0.tgz
+│   └── kibana-0.1.1.tgz
+├── Chart.yaml
+├── requirements.lock
+├── requirements.yaml
+└── values.yaml
+
+1 directory, 7 files
+kubernetes/Charts$ tree elasticsearch/
+elasticsearch/
+├── Chart.yaml
+├── templates
+│   ├── pvc.yaml
+│   ├── service.yaml
+│   └── statefulset.yaml
+└── values.yaml
+
+1 directory, 5 files
+kubernetes/Charts$ tree fluentd/
+fluentd/
+├── Chart.yaml
+├── templates
+│   ├── configmap.yaml
+│   └── deamonset.yaml
+└── values.yaml
+
+1 directory, 4 files
+```
+
+В целом, мне было интересно лишь попробовать собрать всё в один пакет, поэтому параметризировать конфигурацию не стал. Добавил только необходимые параметры:
+kubernetes/Charts/efk2/values.yaml
+```yaml
+---
+kibana:
+  ingress:
+    enabled: true
+    hosts: {reddit-kibana}
+  env:
+    ELASTICSEARCH_URL: http://elasticsearch-logging:9200
+```
+
+Деплой можно выполнить следующим образом:
+```bash
+kubernetes/Charts/efk2$ helm install --name efk .
+```

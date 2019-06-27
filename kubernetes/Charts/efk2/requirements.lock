@@ -1,0 +1,12 @@
+dependencies:
+- name: fluentd
+  repository: file://../fluentd
+  version: 1.0.0
+- name: elasticsearch
+  repository: file://../elasticsearch
+  version: 1.0.0
+- name: kibana
+  repository: https://kubernetes-charts.storage.googleapis.com
+  version: 0.1.1
+digest: sha256:eb0c8d0e6af3e84ccf3ab0b810d83552a7629fa29759895b9ac04e61f4399a4e
+generated: "2019-06-27T17:46:54.255880408+02:00"
