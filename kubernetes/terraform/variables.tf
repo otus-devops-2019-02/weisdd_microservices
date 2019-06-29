@@ -16,15 +16,23 @@ variable "zone" {
   default     = "europe-west1-b"
 }
 
-variable "initial_node_count" {
+variable "node_count_1" {
   default = 2
+}
+
+variable "node_count_2" {
+  default = 1
 }
 
 variable "disk_size" {
   default = 20
 }
 
-variable "machine_type" {
+variable "machine_type_1" {
+  default = "g1-small"
+}
+
+variable "machine_type_2" {
   default = "n1-standard-1"
 }
 

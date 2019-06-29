@@ -1,0 +1,8 @@
+---
+name: elasticsearch
+version: 1.0.0
+description: elasticsearch as a part of EFK
+maintainers:
+  - name: Igor Beliakov
+    email: user@example.com
+appVersion: 1.0
